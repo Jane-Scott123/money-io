@@ -72,11 +72,9 @@
 <!-- START SCREEN -->
 <div class="screen" id="start-screen">
   <h1>💰 Money.io</h1>
-  <p>Start as a penny. Eat loose change. Evolve from a penny to a $10,000 bill!</p>
-  <p style="font-size:12px; color:#888; margin-top:4px;">WASD / Arrow Keys to move &nbsp;|&nbsp; Space = Mint Boost &nbsp;|&nbsp; Q = Counterfeit Bait</p>
+  <p>Start as a penny. Eat loose change. Your collected coins orbit you as a cloud — spend them on upgrades or save up to evolve!</p>
+  <p style="font-size:12px; color:#888; margin-top:4px;">WASD / Arrow Keys to move &nbsp;|&nbsp; U = Upgrades &nbsp;|&nbsp; Space = Mint Boost &nbsp;|&nbsp; Q = Counterfeit Bait</p>
   <button class="btn" onclick="startGame()">▶ Play</button>
-  <button class="btn btn-secondary" onclick="showUpgrades(true)">⚡ Upgrades</button>
-  <div style="margin-top:16px; color:#ffd700; font-size:14px;" id="start-gold-display"></div>
 </div>
 
 <!-- GAME OVER SCREEN -->
@@ -85,25 +83,22 @@
   <div class="big-stat" id="go-denom"></div>
   <p id="go-value"></p>
   <p id="go-rank"></p>
-  <p id="go-gold-earned" style="color:#ffd700;"></p>
   <button class="btn" onclick="startGame()">▶ Respawn as Penny</button>
-  <button class="btn btn-secondary" onclick="showUpgrades(false)">⚡ Upgrades</button>
 </div>
 
 <!-- WIN SCREEN -->
 <div class="screen" id="win-screen" style="display:none">
   <h1>🏆 YOU WIN!</h1>
   <p>You reached the legendary <strong>$10,000 Bill!</strong></p>
-  <p style="color:#ffd700;" id="win-gold"></p>
   <button class="btn" onclick="startGame()">▶ Play Again</button>
 </div>
 
-<!-- UPGRADE SCREEN -->
-<div class="screen" id="upgrade-screen" style="display:none">
+<!-- IN-GAME UPGRADE SCREEN (overlay, game pauses) -->
+<div class="screen" id="upgrade-screen" style="display:none; background:rgba(0,0,0,0.92);">
   <h2>⚡ Upgrades</h2>
-  <div id="gold-display">🪙 Gold Coins: <span id="gold-amount">0</span></div>
+  <div id="gold-display">🪙 Cloud Value: <span id="gold-amount">$0.00</span> &nbsp;|&nbsp; Spend your floating coins on upgrades</div>
   <div class="upgrade-grid" id="upgrade-grid"></div>
-  <button class="btn" id="upgrade-back-btn" onclick="hideUpgrades()">← Back</button>
+  <button class="btn" id="upgrade-back-btn" onclick="hideUpgrades()">← Back to Game</button>
 </div>
 
 <!-- HUD -->
@@ -121,7 +116,10 @@
 </div>
 <canvas id="hud-minimap" width="100" height="80"></canvas>
 <div id="hud-value" style="display:none">$<span id="hud-value-num">0.00</span></div>
-<div id="controls-hint" style="display:none">WASD/Arrows: Move &nbsp; Space: Boost &nbsp; Q: Bait</div>
+<div id="controls-hint" style="display:none">WASD/Arrows: Move &nbsp; U: Upgrades &nbsp; Space: Boost &nbsp; Q: Bait</div>
+<!-- In-game upgrade button -->
+<button id="upgrade-btn" style="display:none;position:fixed;top:60px;right:16px;z-index:10;pointer-events:all;" class="btn btn-secondary" onclick="showUpgrades(false)" title="Upgrades (U)">⚡ Upgrade</button>
+<div id="hud-cloud" style="display:none;position:fixed;top:60px;left:16px;background:rgba(0,0,0,0.6);border-radius:12px;padding:6px 12px;color:#fff;font-size:12px;pointer-events:none;">☁️ Cloud: <span id="hud-cloud-val">$0.00</span></div>
 
 <!-- Evolution Flash -->
 <div id="evo-flash"></div>
@@ -170,13 +168,14 @@ const BASE_SPEEDS = [210, 200, 195, 185, 175, 160, 148, 138, 125, 112, 100, 90, 
 const LOOSE_DENOMS = [0,0,0,0,1,1,1,2,2,3,4]; // weighted
 
 // ===================== UPGRADE DEFINITIONS =====================
+// costs are in cents (matching the game's value unit)
 const UPGRADE_DEFS = [
-  { id: 'speed',    name: 'Move Speed',       desc: '+5% speed per level', max: 10, costBase: 5,  costMult: 1.6 },
-  { id: 'radius',   name: 'Eat Radius',       desc: '+8% eat radius per level', max: 10, costBase: 6,  costMult: 1.7 },
-  { id: 'magnet',   name: 'Magnetism',        desc: 'Pull loose money toward you', max: 8, costBase: 8,  costMult: 1.8 },
-  { id: 'armor',    name: 'Armor',            desc: 'Survive hits from larger players', max: 5, costBase: 15, costMult: 2.0 },
-  { id: 'boost',    name: 'Mint Boost',       desc: 'Space: speed burst (10s cooldown)', max: 5, costBase: 10, costMult: 1.9 },
-  { id: 'bait',     name: 'Counterfeit Bait', desc: 'Q: drop decoy that blinds eaters', max: 5, costBase: 12, costMult: 2.0 },
+  { id: 'speed',  name: 'Move Speed',       desc: '+5% speed per level',               max: 10, costs: [3,7,14,25,40,60,85,115,150,200] },
+  { id: 'radius', name: 'Eat Radius',       desc: '+8% eat/absorb radius per level',   max: 10, costs: [4,9,18,32,52,78,110,148,195,250] },
+  { id: 'magnet', name: 'Magnetism',        desc: 'Pull loose money toward you',        max: 8,  costs: [5,12,24,44,72,108,154,210] },
+  { id: 'armor',  name: 'Armor',            desc: 'Survive hits from larger players',  max: 5,  costs: [15,35,70,130,220] },
+  { id: 'boost',  name: 'Mint Boost',       desc: 'Space: speed burst, 10s cooldown', max: 5,  costs: [10,22,42,75,120] },
+  { id: 'bait',   name: 'Counterfeit Bait', desc: 'Q: drop decoy that stuns eaters',  max: 5,  costs: [12,28,55,100,165] },
 ];
 
 // ===================== STATE =====================
@@ -184,7 +183,12 @@ let canvas, ctx, minimapCanvas, minimapCtx;
 let keys = {};
 let touchTarget = null;
 let gameRunning = false;
-let upgradeReturnToGame = false;
+
+// Per-match upgrades (reset on death)
+let matchUpgrades = {};
+
+function getUpgradeLevel(id) { return matchUpgrades[id] || 0; }
+function upgradeCostCents(def, lv) { return def.costs[lv] || 99999; }
 
 let player, bots, looseMoney, particles, baits;
 let camera = { x: 0, y: 0 };
@@ -192,22 +196,7 @@ let audioCtx = null;
 let mintBoostCooldown = 0;
 let mintBoostActive = 0;
 let baitCooldown = 0;
-let armorHits = 0;
 let stunTimer = 0;
-let goldCoins = 0;
-let matchGold = 0;
-
-// Upgrades stored in localStorage
-function loadUpgrades() {
-  try { return JSON.parse(localStorage.getItem('moneyio_upgrades') || '{}'); } catch { return {}; }
-}
-function saveUpgrades(u) { localStorage.setItem('moneyio_upgrades', JSON.stringify(u)); }
-function loadGold() { return parseInt(localStorage.getItem('moneyio_gold') || '0'); }
-function saveGold(g) { localStorage.setItem('moneyio_gold', String(g)); }
-function getUpgradeLevel(id) { return loadUpgrades()[id] || 0; }
-function upgradeCost(def, currentLevel) {
-  return Math.round(def.costBase * Math.pow(def.costMult, currentLevel));
-}
 
 // ===================== AUDIO =====================
 function getAudioCtx() {
@@ -285,12 +274,51 @@ function createPlayer() {
     x: WORLD_W / 2 + (Math.random() - 0.5) * 200,
     y: WORLD_H / 2 + (Math.random() - 0.5) * 200,
     denomIdx: 0,
-    value: DENOMINATIONS[0].value,
-    vx: 0, vy: 0,
+    // cloud: orbiting coin items collected but not yet evolved into
+    cloud: [],
     armorHits: 0,
     stunTimer: 0,
     face: makeFace(),
   };
+}
+
+// Total value = denomination base + sum of cloud coins
+function playerTotalValue() {
+  return DENOMINATIONS[player.denomIdx].value + cloudValue(player.cloud);
+}
+function cloudValue(cloud) {
+  return cloud.reduce((s, c) => s + c.value, 0);
+}
+
+// Add a coin to the player cloud, animating it flying in from world position (wx, wy)
+function addToCloud(wx, wy, denomIdx, value) {
+  const angle = Math.random() * Math.PI * 2;
+  const orbitDist = playerRadius() + 22 + Math.random() * 30;
+  player.cloud.push({
+    wx, wy,           // current world position (animates toward orbit)
+    denomIdx, value,
+    angle,
+    orbitDist,
+    orbitSpeed: (0.8 + Math.random() * 0.8) * (Math.random() < 0.5 ? 1 : -1),
+    flyIn: 1.0,       // 1 = still flying in, 0 = orbiting
+  });
+}
+
+// Remove cloud coins totalling at least `costCents`; returns true if successful
+function spendCloudCoins(costCents) {
+  if (cloudValue(player.cloud) < costCents) return false;
+  // Sort ascending by value so we spend smallest coins first
+  const sorted = [...player.cloud].sort((a, b) => a.value - b.value);
+  let remaining = costCents;
+  const toRemove = new Set();
+  for (const c of sorted) {
+    if (remaining <= 0) break;
+    toRemove.add(c);
+    remaining -= c.value;
+  }
+  player.cloud = player.cloud.filter(c => !toRemove.has(c));
+  // Overpay: remaining is negative, that value is just lost (small rounding loss)
+  return true;
 }
 
 function makeFace() {
@@ -354,11 +382,11 @@ function inSafeZone(x, y) {
 // ===================== GAME INIT =====================
 function startGame() {
   hideAllScreens();
-  goldCoins = loadGold();
-  matchGold = 0;
+
+  // Upgrades reset each match
+  matchUpgrades = {};
 
   player = createPlayer();
-  player.armorHits = getUpgradeLevel('armor');
 
   bots = [];
   for (let i = 0; i < BOT_COUNT; i++) bots.push(createBot());
@@ -388,8 +416,9 @@ function hideAllScreens() {
 }
 function showHUD(show) {
   const d = show ? '' : 'none';
-  ['hud-denom','hud-progress-wrap','hud-leaderboard','hud-value','controls-hint'].forEach(id => {
-    document.getElementById(id).style.display = d;
+  ['hud-denom','hud-progress-wrap','hud-leaderboard','hud-value','controls-hint','hud-cloud','upgrade-btn'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = d;
   });
   document.getElementById('hud-minimap').style.display = show ? '' : 'none';
 }
@@ -410,65 +439,63 @@ function gameLoop(ts) {
 
 // ===================== UPDATE =====================
 function update(dt) {
-  // Timers
   if (mintBoostActive > 0) mintBoostActive -= dt;
   if (mintBoostCooldown > 0) mintBoostCooldown -= dt;
   if (baitCooldown > 0) baitCooldown -= dt;
-  if (stunTimer > 0) { stunTimer -= dt; return; } // stunned, skip movement
+  if (stunTimer > 0) { stunTimer -= dt; return; }
 
-  // Player movement
   updatePlayerMovement(dt);
-
-  // Bots
   bots.forEach(b => updateBot(b, dt));
+  updateCloud(dt);
 
   // Loose money magnet
   const magnetLv = getUpgradeLevel('magnet');
-  const magnetRange = magnetLv * 60;
   if (magnetLv > 0) {
+    const magnetRange = magnetLv * 70;
     looseMoney.forEach(lm => {
       const dx = player.x - lm.x, dy = player.y - lm.y;
       const dist = Math.sqrt(dx*dx + dy*dy);
       if (dist < magnetRange && dist > 1) {
-        const speed = 120 * magnetLv;
-        lm.x += (dx / dist) * speed * dt;
-        lm.y += (dy / dist) * speed * dt;
+        lm.x += (dx / dist) * 130 * magnetLv * dt;
+        lm.y += (dy / dist) * 130 * magnetLv * dt;
       }
     });
   }
 
-  // Player eats loose money
+  // Player eats loose money → goes to cloud
   const eatR = playerEatRadius();
   looseMoney = looseMoney.filter(lm => {
     const dx = player.x - lm.x, dy = player.y - lm.y;
     if (dx*dx + dy*dy < eatR*eatR) {
-      player.value += lm.value;
+      addToCloud(lm.x, lm.y, lm.denomIdx, lm.value);
       spawnParticles(lm.x, lm.y, DENOMINATIONS[lm.denomIdx].color, 4);
       playChing(lm.denomIdx);
-      looseMoney.push(createLooseMoney(true)); // respawn
+      looseMoney.push(createLooseMoney(true));
       return false;
     }
     return true;
   });
 
-  // Evolution check
+  // Evolution check: total value (denom base + cloud) must reach evolveAt
+  const total = playerTotalValue();
   while (player.denomIdx < DENOMINATIONS.length - 1 &&
-         player.value >= DENOMINATIONS[player.denomIdx].evolveAt) {
+         total >= DENOMINATIONS[player.denomIdx].evolveAt) {
+    // Consume the cloud coins needed above the current denom base
+    const needed = DENOMINATIONS[player.denomIdx].evolveAt - DENOMINATIONS[player.denomIdx].value;
+    if (needed > 0) spendCloudCoins(needed);
     player.denomIdx++;
-    DENOMINATIONS[player.denomIdx]; // no-op
     triggerEvolution(player.denomIdx);
+    break; // re-check next frame
   }
 
-  // Win check
   if (player.denomIdx >= DENOMINATIONS.length - 1) {
     gameOver(true);
     return;
   }
 
-  // Player eats bots / bots eat player
   const pInSafe = inSafeZone(player.x, player.y);
 
-  bots.forEach((bot, bi) => {
+  bots.forEach(bot => {
     if (bot.stunTimer > 0) { bot.stunTimer -= dt; return; }
 
     // Bot eats loose money
@@ -483,33 +510,40 @@ function update(dt) {
       }
     }
 
-    // Bot evolution
     while (bot.denomIdx < DENOMINATIONS.length - 1 &&
            bot.value >= DENOMINATIONS[bot.denomIdx].evolveAt) {
       bot.denomIdx++;
     }
 
-    // Can player eat bot?
+    // Player eats bot → bot's value goes to cloud
     if (!pInSafe && player.denomIdx > bot.denomIdx) {
       const dx = player.x - bot.x, dy = player.y - bot.y;
       const r = eatR + denomRadius(bot.denomIdx) * 0.5;
       if (dx*dx + dy*dy < r*r) {
-        player.value += bot.value;
+        // Scatter bot value into several cloud coins
+        const denomD = DENOMINATIONS[bot.denomIdx];
+        const count = Math.min(8, Math.max(1, Math.floor(bot.value / denomD.value)));
+        for (let k = 0; k < count; k++) {
+          const spread = 30;
+          addToCloud(
+            bot.x + (Math.random()-0.5)*spread,
+            bot.y + (Math.random()-0.5)*spread,
+            bot.denomIdx,
+            Math.floor(bot.value / count)
+          );
+        }
         playEatPlayer(player.denomIdx);
-        spawnParticles(bot.x, bot.y, DENOMINATIONS[bot.denomIdx].color, 12);
-        // respawn bot
+        spawnParticles(bot.x, bot.y, denomD.color, 14);
         Object.assign(bot, createBot(0));
-        matchGold += 2;
         return;
       }
     }
 
-    // Can bot eat player?
+    // Bot eats player
     if (!pInSafe && bot.denomIdx > player.denomIdx) {
       const dx = bot.x - player.x, dy = bot.y - player.y;
       const r = denomRadius(bot.denomIdx) * 1.1 + playerRadius() * 0.5;
       if (dx*dx + dy*dy < r*r) {
-        const armorLv = getUpgradeLevel('armor');
         if (player.armorHits > 0) {
           player.armorHits--;
           stunTimer = 1.2;
@@ -524,36 +558,55 @@ function update(dt) {
   });
 
   // Bait logic
-  baits.forEach((bait, bi) => {
+  for (let bi = baits.length - 1; bi >= 0; bi--) {
+    const bait = baits[bi];
     bait.age += dt;
-    if (bait.age > 8) { baits.splice(bi, 1); return; }
+    if (bait.age > 8) { baits.splice(bi, 1); continue; }
+    let hit = false;
     bots.forEach(bot => {
+      if (hit) return;
       if (bot.denomIdx > player.denomIdx) {
         const dx = bot.x - bait.x, dy = bot.y - bait.y;
         if (dx*dx + dy*dy < (denomRadius(bot.denomIdx) + 14) ** 2) {
           bot.stunTimer = 2.5;
           spawnParticles(bait.x, bait.y, '#ffff00', 14);
-          baits.splice(bi, 1);
+          hit = true;
         }
       }
     });
-  });
+    if (hit) baits.splice(bi, 1);
+  }
 
   // Particles
-  particles.forEach(p => {
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.life -= dt;
-    p.vy += 80 * dt;
-  });
+  particles.forEach(p => { p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt; p.vy += 80*dt; });
   particles = particles.filter(p => p.life > 0);
 
-  // Loose money age
   looseMoney.forEach(lm => lm.age += dt);
 }
 
-function playerRadius() { return DENOMINATIONS[player.denomIdx].radius * (1 + getUpgradeLevel('radius') * 0.04); }
-function playerEatRadius() { return playerRadius() * (1 + getUpgradeLevel('radius') * 0.04); }
+// Update cloud coin orbits
+function updateCloud(dt) {
+  const pr = playerRadius();
+  player.cloud.forEach(c => {
+    c.angle += c.orbitSpeed * dt;
+    c.orbitDist = pr + 22 + player.cloud.indexOf(c) * 4;
+    // flyIn: animate from spawn position toward orbit
+    if (c.flyIn > 0) {
+      c.flyIn = Math.max(0, c.flyIn - dt * 3);
+      const t = 1 - c.flyIn;
+      const tx = player.x + Math.cos(c.angle) * c.orbitDist;
+      const ty = player.y + Math.sin(c.angle) * c.orbitDist;
+      c.wx = c.wx + (tx - c.wx) * t * 0.2;
+      c.wy = c.wy + (ty - c.wy) * t * 0.2;
+    } else {
+      c.wx = player.x + Math.cos(c.angle) * c.orbitDist;
+      c.wy = player.y + Math.sin(c.angle) * c.orbitDist;
+    }
+  });
+}
+
+function playerRadius() { return DENOMINATIONS[player.denomIdx].radius * (1 + getUpgradeLevel('radius') * 0.06); }
+function playerEatRadius() { return playerRadius() * 1.15; }
 function denomRadius(di) { return DENOMINATIONS[di].radius; }
 
 function playerSpeed() {
@@ -682,16 +735,14 @@ function spawnParticles(x, y, color, count) {
 
 function triggerEvolution(newDenomIdx) {
   playEvo(newDenomIdx);
-  spawnParticles(player.x, player.y, DENOMINATIONS[newDenomIdx].color, 25);
+  spawnParticles(player.x, player.y, DENOMINATIONS[newDenomIdx].color, 30);
 
   const evoEl = document.getElementById('evo-text');
   evoEl.innerHTML = `<div class="evo-label">🎉 ${DENOMINATIONS[newDenomIdx].name}!</div>`;
   evoEl.style.display = 'block';
   setTimeout(() => { evoEl.style.display = 'none'; }, 900);
 
-  // Reset armor on evo
   player.armorHits = getUpgradeLevel('armor');
-  matchGold += 3 + newDenomIdx * 2;
 }
 
 // ===================== GAME OVER =====================
@@ -699,19 +750,17 @@ function gameOver(win) {
   gameRunning = false;
   showHUD(false);
 
-  goldCoins = loadGold() + matchGold;
-  saveGold(goldCoins);
-
   if (win) {
-    document.getElementById('win-gold').textContent = `+${matchGold} Gold Coins earned! Total: ${goldCoins}`;
     document.getElementById('win-screen').style.display = 'flex';
   } else {
-    const allEntities = [player, ...bots].sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
-    const rank = allEntities.findIndex(e => e === player) + 1;
+    const total = playerTotalValue();
+    const allEntities = [{ denomIdx: player.denomIdx, value: total, isPlayer: true },
+      ...bots.map(b => ({ denomIdx: b.denomIdx, value: b.value }))];
+    allEntities.sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
+    const rank = allEntities.findIndex(e => e.isPlayer) + 1;
     document.getElementById('go-denom').textContent = DENOMINATIONS[player.denomIdx].emoji + ' ' + DENOMINATIONS[player.denomIdx].name;
-    document.getElementById('go-value').textContent = `Value: $${(player.value / 100).toFixed(2)}`;
+    document.getElementById('go-value').textContent = `Value: $${(total / 100).toFixed(2)} (cloud: $${(cloudValue(player.cloud)/100).toFixed(2)})`;
     document.getElementById('go-rank').textContent = `Leaderboard Position: #${rank} of ${allEntities.length}`;
-    document.getElementById('go-gold-earned').textContent = `+${matchGold} Gold Coins earned! Total: ${goldCoins}`;
     document.getElementById('gameover-screen').style.display = 'flex';
   }
 }
@@ -753,6 +802,9 @@ function render() {
 
   // Bots
   bots.forEach(b => drawEntity(b));
+
+  // Cloud coins (drawn behind player)
+  drawCloudCoins();
 
   // Player
   drawEntity(player, true);
@@ -833,6 +885,41 @@ function drawLooseMoney(lm) {
     ctx.fillText(d.symbol, 0, 0);
   }
   ctx.restore();
+}
+
+function drawCloudCoins() {
+  if (!player || !player.cloud) return;
+  player.cloud.forEach(c => {
+    const d = DENOMINATIONS[c.denomIdx];
+    const r = 5 + c.denomIdx * 1.5;
+    const alpha = 0.7 + Math.sin(c.angle * 3 + Date.now()*0.002) * 0.2;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(c.wx, c.wy);
+    if (d.isBill) {
+      const w = r * 2.6, h = r * 1.6;
+      ctx.fillStyle = d.color;
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(-w/2, -h/2, w, h, 3);
+      ctx.fill(); ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI*2);
+      ctx.fillStyle = d.color;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    ctx.fillStyle = d.textColor;
+    ctx.font = `bold ${Math.max(6, r*0.75)}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(d.symbol, 0, 0);
+    ctx.restore();
+  });
 }
 
 function drawBait(b) {
@@ -1028,10 +1115,13 @@ function updateHUD() {
   document.getElementById('hud-denom-icon').textContent = d.emoji;
   document.getElementById('hud-denom-name').textContent = d.name;
 
-  // Progress bar
+  const total = playerTotalValue();
+  const cv = cloudValue(player.cloud);
+
+  // Progress bar based on total value
   const prevVal = d.value;
   const nextVal = d.evolveAt;
-  const prog = nextVal === Infinity ? 1 : Math.min(1, (player.value - prevVal) / (nextVal - prevVal));
+  const prog = nextVal === Infinity ? 1 : Math.min(1, (total - prevVal) / (nextVal - prevVal));
   document.getElementById('hud-progress-bar').style.width = (prog * 100) + '%';
   if (nextVal === Infinity) {
     document.getElementById('hud-progress-label').textContent = '👑 MAX DENOMINATION — YOU WIN!';
@@ -1040,15 +1130,18 @@ function updateHUD() {
     document.getElementById('hud-progress-label').textContent = `Next: ${next.name} (${Math.round(prog * 100)}%)`;
   }
 
-  // Value
-  document.getElementById('hud-value-num').textContent = (player.value / 100).toFixed(2);
+  document.getElementById('hud-value-num').textContent = (total / 100).toFixed(2);
+
+  // Cloud value display
+  const cloudEl = document.getElementById('hud-cloud-val');
+  if (cloudEl) cloudEl.textContent = '$' + (cv / 100).toFixed(2) + ' (' + player.cloud.length + ' coins)';
 
   // Leaderboard
-  const all = [{ name: 'YOU', denomIdx: player.denomIdx, value: player.value }, ...bots.map((b, i) => ({ name: `Bot ${i+1}`, denomIdx: b.denomIdx, value: b.value }))];
+  const all = [{ name: 'YOU', denomIdx: player.denomIdx, value: total },
+    ...bots.map((b, i) => ({ name: `Bot ${i+1}`, denomIdx: b.denomIdx, value: b.value }))];
   all.sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
-  const top5 = all.slice(0, 5);
   const lb = document.getElementById('hud-leaderboard-list');
-  lb.innerHTML = top5.map((e, i) => {
+  lb.innerHTML = all.slice(0, 5).map((e, i) => {
     const d2 = DENOMINATIONS[e.denomIdx];
     const isYou = e.name === 'YOU';
     return `<li style="${isYou ? 'color:#ffd700;font-weight:bold;' : ''}">${i+1}. ${d2.emoji} ${d2.name}${isYou ? ' (You)' : ''}</li>`;
@@ -1056,24 +1149,26 @@ function updateHUD() {
 }
 
 // ===================== UPGRADES SCREEN =====================
+let upgradeReturnToGame = false;
+
 function showUpgrades(fromStart) {
-  upgradeReturnToGame = !fromStart && gameRunning;
-  if (upgradeReturnToGame) gameRunning = false;
+  upgradeReturnToGame = !fromStart;
+  if (gameRunning) { gameRunning = false; }
   hideAllScreens();
   showHUD(false);
 
-  const gold = loadGold();
-  document.getElementById('gold-amount').textContent = gold;
+  const cv = player ? cloudValue(player.cloud) : 0;
+  document.getElementById('gold-amount').textContent = '$' + (cv / 100).toFixed(2);
 
-  const upgrades = loadUpgrades();
   const grid = document.getElementById('upgrade-grid');
   grid.innerHTML = '';
 
   UPGRADE_DEFS.forEach(def => {
-    const lv = upgrades[def.id] || 0;
+    const lv = getUpgradeLevel(def.id);
     const maxed = lv >= def.max;
-    const cost = maxed ? 0 : upgradeCost(def, lv);
-    const canAfford = !maxed && gold >= cost;
+    const costCents = maxed ? 0 : upgradeCostCents(def, lv);
+    const canAfford = !maxed && cv >= costCents;
+    const costLabel = costCents >= 100 ? '$' + (costCents/100).toFixed(2) : costCents + '¢';
 
     const card = document.createElement('div');
     card.className = 'upgrade-card';
@@ -1088,8 +1183,8 @@ function showUpgrades(fromStart) {
       <div class="level-bar">${pips}</div>
       ${maxed
         ? `<div class="maxed">✅ MAX</div>`
-        : `<div class="cost">🪙 Cost: ${cost} Gold</div>
-           <button class="btn" style="font-size:12px;padding:8px 16px;${!canAfford ? 'opacity:0.5;' : ''}"
+        : `<div class="cost">Cost: ${costLabel} from your cloud</div>
+           <button class="btn" style="font-size:12px;padding:8px 16px;${!canAfford ? 'opacity:0.4;' : ''}"
              onclick="buyUpgrade('${def.id}')" ${!canAfford ? 'disabled' : ''}>
              Upgrade (Lv ${lv} → ${lv+1})
            </button>`
@@ -1102,35 +1197,28 @@ function showUpgrades(fromStart) {
 }
 
 function buyUpgrade(id) {
+  if (!player) return;
   const def = UPGRADE_DEFS.find(d => d.id === id);
-  const upgrades = loadUpgrades();
-  const lv = upgrades[id] || 0;
+  const lv = getUpgradeLevel(id);
   if (lv >= def.max) return;
-  const cost = upgradeCost(def, lv);
-  let gold = loadGold();
-  if (gold < cost) return;
-  gold -= cost;
-  saveGold(gold);
-  upgrades[id] = lv + 1;
-  saveUpgrades(upgrades);
+  const cost = upgradeCostCents(def, lv);
+  if (!spendCloudCoins(cost)) return;
+  matchUpgrades[id] = lv + 1;
+  if (id === 'armor') player.armorHits = matchUpgrades.armor;
   playTone(660, 0.2, 'triangle', 0.2);
-  showUpgrades(!upgradeReturnToGame && !gameRunning);
+  showUpgrades(false);
 }
 
 function hideUpgrades() {
   document.getElementById('upgrade-screen').style.display = 'none';
-  if (upgradeReturnToGame) {
+  if (player && upgradeReturnToGame) {
     gameRunning = true;
     showHUD(true);
+    lastTime = 0;
     requestAnimationFrame(gameLoop);
   } else {
     document.getElementById('start-screen').style.display = 'flex';
-    updateStartGold();
   }
-}
-
-function updateStartGold() {
-  document.getElementById('start-gold-display').textContent = `🪙 Gold Coins: ${loadGold()}`;
 }
 
 // ===================== INPUT =====================
@@ -1145,6 +1233,12 @@ document.addEventListener('keydown', e => {
       mintBoostCooldown = 10;
       playTone(880, 0.15, 'square', 0.15);
     }
+    e.preventDefault();
+  }
+
+  // Upgrade screen
+  if (e.code === 'KeyU' && gameRunning) {
+    showUpgrades(false);
     e.preventDefault();
   }
 
@@ -1230,7 +1324,6 @@ window.addEventListener('DOMContentLoaded', () => {
     if (e.touches.length === 0) touchTarget = null;
   }, { passive: false });
 
-  updateStartGold();
   showHUD(false);
 });
 </script>
