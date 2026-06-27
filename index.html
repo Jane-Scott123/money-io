@@ -73,7 +73,7 @@
 <div class="screen" id="start-screen">
   <h1>💰 Money.io</h1>
   <p>Start as a penny. Eat loose change. Your collected coins orbit you as a cloud — spend them on upgrades or save up to evolve!</p>
-  <p style="font-size:12px; color:#888; margin-top:4px;">WASD / Arrow Keys to move &nbsp;|&nbsp; U = Upgrades &nbsp;|&nbsp; Space = Mint Boost &nbsp;|&nbsp; Q = Counterfeit Bait</p>
+  <p style="font-size:12px; color:#888; margin-top:4px;">WASD / Arrow Keys to move &nbsp;|&nbsp; U = Upgrades &nbsp;|&nbsp; Hold Space = Speed Dash &nbsp;|&nbsp; E = Mint Boost &nbsp;|&nbsp; Q = Counterfeit Bait</p>
   <button class="btn" onclick="startGame()">▶ Play</button>
 </div>
 
@@ -116,7 +116,7 @@
 </div>
 <canvas id="hud-minimap" width="100" height="80"></canvas>
 <div id="hud-value" style="display:none">$<span id="hud-value-num">0.00</span></div>
-<div id="controls-hint" style="display:none">WASD/Arrows: Move &nbsp; U: Upgrades &nbsp; Space: Boost &nbsp; Q: Bait</div>
+<div id="controls-hint" style="display:none">WASD/Arrows: Move &nbsp; U: Upgrades &nbsp; Hold Space: Dash &nbsp; E: Boost &nbsp; Q: Bait</div>
 <!-- In-game upgrade button -->
 <button id="upgrade-btn" style="display:none;position:fixed;top:60px;right:16px;z-index:10;pointer-events:all;" class="btn btn-secondary" onclick="showUpgrades(false)" title="Upgrades (U)">⚡ Upgrade</button>
 <div id="hud-cloud" style="display:none;position:fixed;top:60px;left:16px;background:rgba(0,0,0,0.6);border-radius:12px;padding:6px 12px;color:#fff;font-size:12px;pointer-events:none;">☁️ Cloud: <span id="hud-cloud-val">$0.00</span></div>
@@ -204,9 +204,8 @@ let debtZones = [];
 let debtSafeZones = [];  // yellow — repels hunters, but fast money drain
 let heartbeatTimer = 0;
 let wantedBots = [];
-let dashActive = 0;       // seconds remaining on double-tap dash
+let dashActive = false;   // true while Space held and player can dash
 let dashDrainTimer = 0;   // timer to drain next cost unit
-let lastKeyTime = {};     // for double-tap detection
 
 // ===================== AUDIO =====================
 function getAudioCtx() {
@@ -454,9 +453,8 @@ function startGame() {
 
   wantedBots = [];
   heartbeatTimer = 0;
-  dashActive = 0;
+  dashActive = false;
   dashDrainTimer = 0;
-  lastKeyTime = {};
 
   showHUD(true);
   gameRunning = true;
@@ -500,9 +498,11 @@ function update(dt) {
   if (baitCooldown > 0) baitCooldown -= dt;
   if (stunTimer > 0) { stunTimer -= dt; return; }
 
-  // Dash: drains cloud coins, then upgrades, then denomination
-  if (dashActive > 0) {
-    dashActive -= dt;
+  // Space-bar dash: active while Space is held; penny with empty cloud cannot dash
+  const canDash = player.cloud.length > 0 || player.denomIdx > 0;
+  dashActive = !!(keys['Space'] && canDash);
+
+  if (dashActive) {
     dashDrainTimer -= dt;
     if (dashDrainTimer <= 0) {
       dashDrainTimer = 0.28;
@@ -512,35 +512,19 @@ function update(dt) {
         const lost = sorted[0];
         player.cloud = player.cloud.filter(c => c !== lost);
         spawnParticles(player.x, player.y, '#ff8800', 3);
-      } else {
-        // No coins — drain an upgrade level (highest-cost first)
-        let bestId = null, bestRefund = -1;
-        UPGRADE_DEFS.forEach(def => {
-          const lv = getUpgradeLevel(def.id);
-          if (lv > 0) {
-            const cost = upgradeCostCents(def, lv - 1);
-            if (cost > bestRefund) { bestRefund = cost; bestId = def.id; }
-          }
-        });
-        if (bestId) {
-          const lv = getUpgradeLevel(bestId);
-          const refund = Math.floor(upgradeCostCents(UPGRADE_DEFS.find(d=>d.id===bestId), lv - 1) * 0.6);
-          matchUpgrades[bestId] = lv - 1;
-          if (bestId === 'armor') player.armorHits = Math.min(player.armorHits, matchUpgrades.armor || 0);
-          // Refund most of upgrade cost back to cloud
-          if (refund > 0) addToCloud(player.x, player.y, Math.max(0, makeDenomIdx(refund)), refund);
-          spawnParticles(player.x, player.y, '#ff4400', 8);
-          playBounce();
-        } else if (player.denomIdx > 0) {
-          // No upgrades left — denomination drops, value returns to cloud
-          const lostValue = DENOMINATIONS[player.denomIdx].value;
-          player.denomIdx--;
-          const refundDi = Math.max(0, player.denomIdx);
-          addToCloud(player.x, player.y, refundDi, Math.floor(lostValue * 0.7));
-          spawnParticles(player.x, player.y, '#ff0000', 14);
-          playBounce();
-        }
+      } else if (player.denomIdx > 0) {
+        // Cloud empty — downgrade denomination, ~80% difference returns as random change
+        const fromValue = DENOMINATIONS[player.denomIdx].value;
+        const toValue = DENOMINATIONS[player.denomIdx - 1].value;
+        player.denomIdx--;
+        const returnAmt = Math.floor((fromValue - toValue) * (0.75 + Math.random() * 0.1));
+        makeRandomChange(returnAmt).forEach(coin =>
+          addToCloud(player.x + (Math.random()-0.5)*30, player.y + (Math.random()-0.5)*30,
+            coin.denomIdx, coin.value));
+        spawnParticles(player.x, player.y, '#ff4400', 12);
+        playBounce();
       }
+      // penny + no cloud: dashActive is already false, nothing drains
     }
   } else {
     dashDrainTimer = 0;
@@ -1738,7 +1722,7 @@ function updateHUD() {
 
   // Cloud value display
   const cloudEl = document.getElementById('hud-cloud-val');
-  const dashStr = dashActive > 0 ? ` ⚡DASH ${dashActive.toFixed(1)}s` : '';
+  const dashStr = dashActive ? ' ⚡ SPEEDING' : '';
   if (cloudEl) cloudEl.textContent = '$' + (cv / 100).toFixed(2) + ' (' + player.cloud.length + ' coins)' + dashStr;
 
   // Leaderboard
@@ -1782,8 +1766,6 @@ function showUpgrades(fromStart) {
       `<div class="level-pip ${i < lv ? 'filled' : ''}"></div>`
     ).join('');
 
-    const refundCents = lv > 0 ? Math.floor(upgradeCostCents(def, lv - 1) * 0.55) : 0;
-    const refundLabel = refundCents >= 100 ? '$' + (refundCents/100).toFixed(2) : refundCents + '¢';
     card.innerHTML = `
       <h4>${def.name}</h4>
       <p>${def.desc}</p>
@@ -1796,13 +1778,58 @@ function showUpgrades(fromStart) {
              Upgrade (Lv ${lv} → ${lv+1})
            </button>`
       }
-      ${lv > 0 ? `<button class="btn btn-secondary" style="font-size:11px;padding:5px 12px;margin-top:4px;"
-        onclick="sellUpgrade('${def.id}')">↩ Sell (refund ${refundLabel})</button>` : ''}
     `;
     grid.appendChild(card);
   });
 
+  // Downgrade denomination card
+  if (player && player.denomIdx > 0) {
+    const fromD = DENOMINATIONS[player.denomIdx];
+    const toD = DENOMINATIONS[player.denomIdx - 1];
+    const diffVal = fromD.value - toD.value;
+    const returnApprox = Math.floor(diffVal * 0.80);
+    const retLabel = returnApprox >= 100 ? '$' + (returnApprox/100).toFixed(2) : returnApprox + '¢';
+    const downCard = document.createElement('div');
+    downCard.className = 'upgrade-card';
+    downCard.style.borderColor = 'rgba(255,100,50,0.4)';
+    downCard.innerHTML = `
+      <h4 style="color:#ff8866;">⬇ Downgrade Denomination</h4>
+      <p>${fromD.name} → ${toD.name}<br>~${retLabel} returns to your cloud as change</p>
+      <button class="btn btn-secondary" style="font-size:12px;padding:8px 16px;color:#ff8866;"
+        onclick="downgradeDenomination()">Downgrade to ${toD.name}</button>
+    `;
+    grid.appendChild(downCard);
+  }
+
   document.getElementById('upgrade-screen').style.display = 'flex';
+}
+
+function downgradeDenomination() {
+  if (!player || player.denomIdx <= 0) return;
+  const fromValue = DENOMINATIONS[player.denomIdx].value;
+  const toValue = DENOMINATIONS[player.denomIdx - 1].value;
+  player.denomIdx--;
+  const returnAmt = Math.floor((fromValue - toValue) * (0.75 + Math.random() * 0.1));
+  makeRandomChange(returnAmt).forEach(coin =>
+    addToCloud(player.x + (Math.random()-0.5)*40, player.y + (Math.random()-0.5)*40,
+      coin.denomIdx, coin.value));
+  spawnParticles(player.x, player.y, '#ff6644', 10);
+  playBounce();
+  showUpgrades(false);
+}
+
+function makeRandomChange(totalCents) {
+  const coins = [];
+  let remaining = totalCents;
+  while (remaining > 0 && coins.length < 20) {
+    const fits = [];
+    for (let i = 0; i < DENOMINATIONS.length - 1 && DENOMINATIONS[i].value <= remaining; i++) fits.push(i);
+    if (!fits.length) break;
+    const pick = fits[Math.floor(Math.random() * fits.length)];
+    coins.push({ denomIdx: pick, value: DENOMINATIONS[pick].value });
+    remaining -= DENOMINATIONS[pick].value;
+  }
+  return coins;
 }
 
 function buyUpgrade(id) {
@@ -1818,20 +1845,6 @@ function buyUpgrade(id) {
   showUpgrades(false);
 }
 
-function sellUpgrade(id) {
-  if (!player) return;
-  const def = UPGRADE_DEFS.find(d => d.id === id);
-  const lv = getUpgradeLevel(id);
-  if (lv <= 0) return;
-  const refund = Math.floor(upgradeCostCents(def, lv - 1) * 0.55);
-  matchUpgrades[id] = lv - 1;
-  if (id === 'armor') player.armorHits = Math.min(player.armorHits, matchUpgrades.armor || 0);
-  // Add refund back as cloud coin at appropriate denomination
-  const di = Math.max(0, makeDenomIdx(refund));
-  addToCloud(player.x + (Math.random()-0.5)*40, player.y + (Math.random()-0.5)*40, di, refund);
-  playTone(330, 0.18, 'triangle', 0.15);
-  showUpgrades(false);
-}
 
 function hideUpgrades() {
   document.getElementById('upgrade-screen').style.display = 'none';
@@ -1846,31 +1859,21 @@ function hideUpgrades() {
 }
 
 // ===================== INPUT =====================
-const DASH_KEYS = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','KeyA','KeyD','KeyW','KeyS']);
 document.addEventListener('keydown', e => {
   keys[e.code] = true;
 
-  // Double-tap movement key = speed dash (burns money). !e.repeat = fresh press only.
-  if (DASH_KEYS.has(e.code) && gameRunning && dashActive <= 0 && !e.repeat) {
-    const now = Date.now();
-    if (now - (lastKeyTime[e.code] || 0) < 280) {
-      dashActive = 2.5;
-      dashDrainTimer = 0;
-      playTone(520, 0.12, 'square', 0.14);
-    }
-    lastKeyTime[e.code] = now;
-  }
-
-  // Mint Boost
-  if (e.code === 'Space' && gameRunning && mintBoostCooldown <= 0) {
+  // Mint Boost (E key)
+  if (e.code === 'KeyE' && gameRunning && mintBoostCooldown <= 0) {
     const boostLv = getUpgradeLevel('boost');
     if (boostLv > 0) {
       mintBoostActive = 1.5 + boostLv * 0.3;
       mintBoostCooldown = 10;
       playTone(880, 0.15, 'square', 0.15);
     }
-    e.preventDefault();
   }
+
+  // Space is used for dash (hold to speed) — prevent page scroll
+  if (e.code === 'Space') e.preventDefault();
 
   // Upgrade screen
   if (e.code === 'KeyU' && gameRunning) {
