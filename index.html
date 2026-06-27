@@ -203,6 +203,9 @@ let ghost = null;
 let debtZones = [];
 let heartbeatTimer = 0;
 let wantedBots = [];
+let dashActive = 0;       // seconds remaining on double-tap dash
+let dashDrainTimer = 0;   // timer to drain next cost unit
+let lastKeyTime = {};     // for double-tap detection
 
 // ===================== AUDIO =====================
 function getAudioCtx() {
@@ -452,6 +455,9 @@ function startGame() {
 
   wantedBots = [];
   heartbeatTimer = 0;
+  dashActive = 0;
+  dashDrainTimer = 0;
+  lastKeyTime = {};
 
   showHUD(true);
   gameRunning = true;
@@ -494,6 +500,46 @@ function update(dt) {
   if (mintBoostCooldown > 0) mintBoostCooldown -= dt;
   if (baitCooldown > 0) baitCooldown -= dt;
   if (stunTimer > 0) { stunTimer -= dt; return; }
+
+  // Dash: drains cloud coins, then upgrades, then denomination
+  if (dashActive > 0) {
+    dashActive -= dt;
+    dashDrainTimer -= dt;
+    if (dashDrainTimer <= 0) {
+      dashDrainTimer = 0.28;
+      if (player.cloud.length > 0) {
+        // Drain smallest cloud coin
+        const sorted = [...player.cloud].sort((a, b) => a.value - b.value);
+        const lost = sorted[0];
+        player.cloud = player.cloud.filter(c => c !== lost);
+        spawnParticles(player.x, player.y, '#ff8800', 3);
+      } else {
+        // No coins — drain an upgrade level (highest-cost first)
+        let bestId = null, bestRefund = -1;
+        UPGRADE_DEFS.forEach(def => {
+          const lv = getUpgradeLevel(def.id);
+          if (lv > 0) {
+            const cost = upgradeCostCents(def, lv - 1);
+            if (cost > bestRefund) { bestRefund = cost; bestId = def.id; }
+          }
+        });
+        if (bestId) {
+          const lv = getUpgradeLevel(bestId);
+          matchUpgrades[bestId] = lv - 1;
+          if (bestId === 'armor') player.armorHits = Math.min(player.armorHits, matchUpgrades.armor || 0);
+          spawnParticles(player.x, player.y, '#ff4400', 8);
+          playBounce();
+        } else if (player.denomIdx > 0) {
+          // No upgrades left — denomination drops
+          player.denomIdx--;
+          spawnParticles(player.x, player.y, '#ff0000', 14);
+          playBounce();
+        }
+      }
+    }
+  } else {
+    dashDrainTimer = 0;
+  }
 
   updatePlayerMovement(dt);
   bots.forEach(b => updateBot(b, dt));
@@ -752,7 +798,8 @@ function playerSpeed() {
   const base = BASE_SPEEDS[player.denomIdx] || 100;
   const boost = (mintBoostActive > 0) ? 1.8 : 1;
   const lvBoost = 1 + getUpgradeLevel('speed') * 0.05;
-  return base * boost * lvBoost;
+  const dashBoost = dashActive > 0 ? 2.1 : 1;
+  return base * boost * lvBoost * dashBoost;
 }
 
 function updatePlayerMovement(dt) {
@@ -789,11 +836,32 @@ function updateBot(bot, dt) {
   bot.chasingPlayer = false;
   bot.wanderTimer -= dt;
 
-  // Bounty hunters: always chase the player at 1.4× speed, never flee
+  // Bounty hunters: chase player only if larger; flee from safe zone
   if (bot.isBountyHunter) {
-    bot.targetX = player.x;
-    bot.targetY = player.y;
-    bot.chasingPlayer = true;
+    const playerInSafe = inSafeZone(player.x, player.y);
+    const canEatPlayer = bot.denomIdx > player.denomIdx;
+
+    if (playerInSafe) {
+      // Flee away from safe zone center
+      const szCx = SAFE_ZONE.x + SAFE_ZONE.w / 2;
+      const szCy = SAFE_ZONE.y + SAFE_ZONE.h / 2;
+      bot.targetX = bot.x + (bot.x - szCx) * 3;
+      bot.targetY = bot.y + (bot.y - szCy) * 3;
+      bot.chasingPlayer = false;
+    } else if (canEatPlayer) {
+      bot.targetX = player.x;
+      bot.targetY = player.y;
+      bot.chasingPlayer = true;
+    } else {
+      // Too small to threaten player — wander
+      bot.chasingPlayer = false;
+      if (bot.wanderTimer <= 0) {
+        bot.targetX = 100 + Math.random() * (WORLD_W - 200);
+        bot.targetY = 100 + Math.random() * (WORLD_H - 200);
+        bot.wanderTimer = 2 + Math.random() * 2;
+      }
+    }
+
     const bdx = bot.targetX - bot.x, bdy = bot.targetY - bot.y;
     const bdist = Math.sqrt(bdx*bdx + bdy*bdy);
     if (bdist > 4) {
@@ -1400,6 +1468,22 @@ function drawEntity(e, isPlayer = false) {
     ctx.stroke();
   }
 
+  // Dash indicator — orange burning ring
+  if (isPlayer && dashActive > 0) {
+    const dp = dashActive / 2.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 15, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,140,0,${0.5 + Math.sin(Date.now()*0.02)*0.3})`;
+    ctx.lineWidth = 4;
+    ctx.stroke();
+    // Burn arc showing time remaining
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 15, -Math.PI/2, -Math.PI/2 + Math.PI*2*dp);
+    ctx.strokeStyle = 'rgba(255,220,0,0.9)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+
   // Name label
   if (isPlayer || r > 20) {
     ctx.fillStyle = '#fff';
@@ -1509,7 +1593,8 @@ function updateHUD() {
 
   // Cloud value display
   const cloudEl = document.getElementById('hud-cloud-val');
-  if (cloudEl) cloudEl.textContent = '$' + (cv / 100).toFixed(2) + ' (' + player.cloud.length + ' coins)';
+  const dashStr = dashActive > 0 ? ` ⚡DASH ${dashActive.toFixed(1)}s` : '';
+  if (cloudEl) cloudEl.textContent = '$' + (cv / 100).toFixed(2) + ' (' + player.cloud.length + ' coins)' + dashStr;
 
   // Leaderboard
   const all = [{ name: 'YOU', denomIdx: player.denomIdx, value: total },
@@ -1552,6 +1637,8 @@ function showUpgrades(fromStart) {
       `<div class="level-pip ${i < lv ? 'filled' : ''}"></div>`
     ).join('');
 
+    const refundCents = lv > 0 ? Math.floor(upgradeCostCents(def, lv - 1) * 0.55) : 0;
+    const refundLabel = refundCents >= 100 ? '$' + (refundCents/100).toFixed(2) : refundCents + '¢';
     card.innerHTML = `
       <h4>${def.name}</h4>
       <p>${def.desc}</p>
@@ -1564,6 +1651,8 @@ function showUpgrades(fromStart) {
              Upgrade (Lv ${lv} → ${lv+1})
            </button>`
       }
+      ${lv > 0 ? `<button class="btn btn-secondary" style="font-size:11px;padding:5px 12px;margin-top:4px;"
+        onclick="sellUpgrade('${def.id}')">↩ Sell (refund ${refundLabel})</button>` : ''}
     `;
     grid.appendChild(card);
   });
@@ -1584,6 +1673,21 @@ function buyUpgrade(id) {
   showUpgrades(false);
 }
 
+function sellUpgrade(id) {
+  if (!player) return;
+  const def = UPGRADE_DEFS.find(d => d.id === id);
+  const lv = getUpgradeLevel(id);
+  if (lv <= 0) return;
+  const refund = Math.floor(upgradeCostCents(def, lv - 1) * 0.55);
+  matchUpgrades[id] = lv - 1;
+  if (id === 'armor') player.armorHits = Math.min(player.armorHits, matchUpgrades.armor || 0);
+  // Add refund back as cloud coin at appropriate denomination
+  const di = Math.max(0, makeDenomIdx(refund));
+  addToCloud(player.x + (Math.random()-0.5)*40, player.y + (Math.random()-0.5)*40, di, refund);
+  playTone(330, 0.18, 'triangle', 0.15);
+  showUpgrades(false);
+}
+
 function hideUpgrades() {
   document.getElementById('upgrade-screen').style.display = 'none';
   if (player && upgradeReturnToGame) {
@@ -1597,8 +1701,20 @@ function hideUpgrades() {
 }
 
 // ===================== INPUT =====================
+const DASH_KEYS = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','KeyA','KeyD','KeyW','KeyS']);
 document.addEventListener('keydown', e => {
   keys[e.code] = true;
+
+  // Double-tap movement key = speed dash (burns money)
+  if (DASH_KEYS.has(e.code) && gameRunning && dashActive <= 0) {
+    const now = Date.now();
+    if (now - (lastKeyTime[e.code] || 0) < 260) {
+      dashActive = 2.5;
+      dashDrainTimer = 0;
+      playTone(520, 0.12, 'square', 0.14);
+    }
+    lastKeyTime[e.code] = now;
+  }
 
   // Mint Boost
   if (e.code === 'Space' && gameRunning && mintBoostCooldown <= 0) {
