@@ -591,6 +591,11 @@ function update(dt) {
   }
 
   const pInSafe = inSafeZone(player.x, player.y);
+  const pInDebtSafe = debtSafeZones.some(dz => {
+    const dx = player.x - dz.x, dy = player.y - dz.y;
+    return dx*dx + dy*dy < dz.r * dz.r;
+  });
+  const pFullySafe = pInSafe || pInDebtSafe;
 
   bots.forEach(bot => {
     if (bot.stunTimer > 0) { bot.stunTimer -= dt; return; }
@@ -622,7 +627,7 @@ function update(dt) {
     }
 
     // Player eats bot → bot's value + cloud go to player
-    if (!pInSafe && player.denomIdx > bot.denomIdx) {
+    if (!pFullySafe && player.denomIdx > bot.denomIdx) {
       const dx = player.x - bot.x, dy = player.y - bot.y;
       const r = eatR + denomRadius(bot.denomIdx) * 0.5;
       if (dx*dx + dy*dy < r*r) {
@@ -641,11 +646,11 @@ function update(dt) {
       }
     }
 
-    // Cloud stealing: entities in close proximity steal coins across clouds
+    // Cloud stealing: entities in close proximity steal coins across clouds (disabled in safe zones)
     {
       const stealDx = player.x - bot.x, stealDy = player.y - bot.y;
       const stealR = playerRadius() + denomRadius(bot.denomIdx) + 30;
-      if (stealDx*stealDx + stealDy*stealDy < stealR*stealR) {
+      if (!pFullySafe && stealDx*stealDx + stealDy*stealDy < stealR*stealR) {
         bot.stealTimer -= dt;
         if (bot.stealTimer <= 0) {
           bot.stealTimer = 0.9;
@@ -671,7 +676,7 @@ function update(dt) {
     }
 
     // Bot eats player
-    if (!pInSafe && bot.denomIdx > player.denomIdx) {
+    if (!pFullySafe && bot.denomIdx > player.denomIdx) {
       const dx = bot.x - player.x, dy = bot.y - player.y;
       const r = denomRadius(bot.denomIdx) * 1.1 + playerRadius() * 0.5;
       if (dx*dx + dy*dy < r*r) {
@@ -896,20 +901,23 @@ function updateBot(bot, dt) {
   bot.chasingPlayer = false;
   bot.wanderTimer -= dt;
 
+  // Compute whether player is in any safe zone (used by all bot types)
+  const playerInSafe = inSafeZone(player.x, player.y);
+  const playerInDebtSafe = debtSafeZones.some(dz => {
+    const ddx = player.x - dz.x, ddy = player.y - dz.y;
+    return ddx*ddx + ddy*ddy < dz.r * dz.r;
+  });
+  const playerProtected = playerInSafe || playerInDebtSafe;
+
   // Bounty hunters: chase player only if larger; flee from safe zone
   if (bot.isBountyHunter) {
-    const playerInSafe = inSafeZone(player.x, player.y);
-    const playerInDebtSafe = debtSafeZones.some(dz => {
-      const ddx = player.x - dz.x, ddy = player.y - dz.y;
-      return ddx*ddx + ddy*ddy < dz.r * dz.r;
-    });
     const canEatPlayer = bot.denomIdx > player.denomIdx;
 
-    if (playerInSafe || playerInDebtSafe) {
+    if (playerProtected) {
       // Flee away from whichever safe zone the player is in
       const fleeFrom = playerInSafe
         ? { x: SAFE_ZONE.x + SAFE_ZONE.w/2, y: SAFE_ZONE.y + SAFE_ZONE.h/2 }
-        : debtSafeZones.find(dz => { const ddx=player.x-dz.x,ddy=player.y-dz.y; return ddx*ddx+ddy*ddy<dz.r*dz.r; });
+        : debtSafeZones.find(dz => { const ddx=player.x-dz.x,ddy=player.y-dz.y; return ddx*ddx+ddy*ddy<dz.r*dz.r; }) || { x: player.x, y: player.y };
       bot.targetX = bot.x + (bot.x - fleeFrom.x) * 3;
       bot.targetY = bot.y + (bot.y - fleeFrom.y) * 3;
       bot.chasingPlayer = false;
@@ -950,13 +958,15 @@ function updateBot(bot, dt) {
   let nearestPrey = null, nearestPreyDist = 9999;
   let nearestThreat = null, nearestThreatDist = 9999;
 
-  // Evaluate player
+  // Evaluate player (skip if player is in any safe zone)
   const pdx = player.x - bot.x, pdy = player.y - bot.y;
   const pdist = Math.sqrt(pdx*pdx + pdy*pdy);
-  if (player.denomIdx > bot.denomIdx && pdist < 350) {
-    if (pdist < nearestThreatDist) { nearestThreat = player; nearestThreatDist = pdist; }
-  } else if (bot.denomIdx > player.denomIdx && pdist < chaseRange) {
-    if (pdist < nearestPreyDist) { nearestPrey = player; nearestPreyDist = pdist; }
+  if (!playerProtected) {
+    if (player.denomIdx > bot.denomIdx && pdist < 350) {
+      if (pdist < nearestThreatDist) { nearestThreat = player; nearestThreatDist = pdist; }
+    } else if (bot.denomIdx > player.denomIdx && pdist < chaseRange) {
+      if (pdist < nearestPreyDist) { nearestPrey = player; nearestPreyDist = pdist; }
+    }
   }
 
   // Evaluate other bots
@@ -1080,8 +1090,8 @@ function updateGhost(dt) {
   ghost.x = Math.max(60, Math.min(WORLD_W - 60, ghost.x));
   ghost.y = Math.max(60, Math.min(WORLD_H - 60, ghost.y));
 
-  // Ghost eats player (ignores safe zone, is unstoppable)
-  if (!inSafeZone(player.x, player.y)) {
+  // Ghost eats player — respects all safe zones
+  if (!inSafeZone(player.x, player.y) && !debtSafeZones.some(dz => { const dx=player.x-dz.x,dy=player.y-dz.y; return dx*dx+dy*dy<dz.r*dz.r; })) {
     const pdx = ghost.x - player.x, pdy = ghost.y - player.y;
     const gr = denomRadius(ghost.denomIdx);
     if (pdx*pdx + pdy*pdy < (gr + playerRadius()) * (gr + playerRadius())) {
