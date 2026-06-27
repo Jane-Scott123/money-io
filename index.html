@@ -199,6 +199,10 @@ let mintBoostCooldown = 0;
 let mintBoostActive = 0;
 let baitCooldown = 0;
 let stunTimer = 0;
+let ghost = null;
+let debtZones = [];
+let heartbeatTimer = 0;
+let wantedBots = [];
 
 // ===================== AUDIO =====================
 function getAudioCtx() {
@@ -231,6 +235,14 @@ function playEvo(denomIdx) {
   notes.forEach((f, i) => setTimeout(() => playTone(f, 0.25, 'triangle', 0.22), i * 80));
 }
 function playBounce() { playTone(150, 0.1, 'sine', 0.08); }
+function playHeartbeat(intensity) {
+  try {
+    const vol = 0.08 + intensity * 0.18;
+    playTone(55 + intensity * 20, 0.1, 'sine', vol);
+    setTimeout(() => playTone(62 + intensity * 15, 0.07, 'sine', vol * 0.6), 120);
+  } catch(e) {}
+}
+function playDebtDrain() { playTone(180, 0.08, 'sawtooth', 0.06); }
 
 // Background music (simple procedural)
 let bgMusicStarted = false;
@@ -409,6 +421,38 @@ function startGame() {
   stunTimer = 0;
   restockTimer = 0;
 
+  // Mark 2 bots as bounty hunters (always chase highest-value player, 1.4× speed)
+  bots[0].isBountyHunter = true;
+  bots[1].isBountyHunter = true;
+
+  // The $10,000 ghost — unkillable, roams toward the richest target
+  ghost = {
+    x: 300 + Math.random() * (WORLD_W - 600),
+    y: 200 + Math.random() * (WORLD_H - 400),
+    denomIdx: DENOMINATIONS.length - 1,
+    value: DENOMINATIONS[DENOMINATIONS.length - 1].value,
+    targetX: WORLD_W / 2, targetY: WORLD_H / 2,
+    wanderTimer: 0,
+    face: makeFace(),
+    stunTimer: 0, armorHits: 0,
+    isGhost: true, chasingPlayer: true,
+  };
+
+  // Debt zones — red patches that drain cloud coins on contact
+  debtZones = [];
+  const dzCount = 4 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < dzCount; i++) {
+    debtZones.push({
+      x: 300 + Math.random() * (WORLD_W - 600),
+      y: 200 + Math.random() * (WORLD_H - 400),
+      r: 90 + Math.random() * 80,
+      drainTimer: 2,
+    });
+  }
+
+  wantedBots = [];
+  heartbeatTimer = 0;
+
   showHUD(true);
   gameRunning = true;
   lastTime = 0;
@@ -453,6 +497,8 @@ function update(dt) {
 
   updatePlayerMovement(dt);
   bots.forEach(b => updateBot(b, dt));
+  if (ghost) updateGhost(dt);
+  if (!gameRunning) return;
   updateCloud(dt);
 
   // Loose money magnet
@@ -566,6 +612,20 @@ function update(dt) {
           stunTimer = 1.2;
           spawnParticles(player.x, player.y, '#ff0000', 10);
           playBounce();
+          // Scatter 2–3 cloud coins — you're bleeding money
+          const scatterN = Math.min(player.cloud.length, 2 + Math.floor(Math.random() * 2));
+          for (let si = 0; si < scatterN; si++) {
+            if (!player.cloud.length) break;
+            const ri = Math.floor(Math.random() * player.cloud.length);
+            const sc = player.cloud.splice(ri, 1)[0];
+            const ang = Math.random() * Math.PI * 2;
+            looseMoney.push({
+              x: Math.max(50, Math.min(WORLD_W-50, player.x + Math.cos(ang) * (50 + Math.random()*70))),
+              y: Math.max(50, Math.min(WORLD_H-50, player.y + Math.sin(ang) * (50 + Math.random()*70))),
+              denomIdx: sc.denomIdx, value: sc.value,
+              r: 6 + sc.denomIdx * 1.8, age: 0,
+            });
+          }
         } else {
           gameOver(false);
           return;
@@ -592,6 +652,68 @@ function update(dt) {
       }
     });
     if (hit) baits.splice(bi, 1);
+  }
+
+  // Debt zones: drain one cloud coin per 1.5s while inside
+  if (player.cloud.length > 0) {
+    debtZones.forEach(dz => {
+      const dx = player.x - dz.x, dy = player.y - dz.y;
+      if (dx*dx + dy*dy < dz.r * dz.r) {
+        dz.drainTimer -= dt;
+        if (dz.drainTimer <= 0) {
+          dz.drainTimer = 1.5;
+          const sorted = [...player.cloud].sort((a, b) => a.value - b.value);
+          const coin = sorted[0];
+          player.cloud = player.cloud.filter(c => c !== coin);
+          const ang = Math.random() * Math.PI * 2;
+          looseMoney.push({
+            x: Math.max(50, Math.min(WORLD_W-50, player.x + Math.cos(ang) * (40 + Math.random()*50))),
+            y: Math.max(50, Math.min(WORLD_H-50, player.y + Math.sin(ang) * (40 + Math.random()*50))),
+            denomIdx: coin.denomIdx, value: coin.value,
+            r: 6 + coin.denomIdx * 1.8, age: 0,
+          });
+          playDebtDrain();
+        }
+      } else {
+        dz.drainTimer = Math.min(dz.drainTimer + dt * 0.5, 1.5);
+      }
+    });
+  }
+
+  // Collect WANTED bots (larger bots chasing player, or bounty hunters nearby)
+  wantedBots = bots.filter(b => {
+    if (b.isBountyHunter) {
+      const dx = b.x - player.x, dy = b.y - player.y;
+      return Math.sqrt(dx*dx + dy*dy) < 500;
+    }
+    return b.chasingPlayer && b.denomIdx > player.denomIdx;
+  });
+  if (ghost) {
+    const gdx = ghost.x - player.x, gdy = ghost.y - player.y;
+    if (Math.sqrt(gdx*gdx + gdy*gdy) < 450) wantedBots = [...wantedBots, ghost];
+  }
+
+  // Escalating heartbeat: plays faster and louder as larger entities close in
+  heartbeatTimer -= dt;
+  if (heartbeatTimer <= 0) {
+    let nearestLargerDist = 9999;
+    bots.forEach(b => {
+      if (b.denomIdx > player.denomIdx) {
+        const dx = b.x - player.x, dy = b.y - player.y;
+        nearestLargerDist = Math.min(nearestLargerDist, Math.sqrt(dx*dx + dy*dy));
+      }
+    });
+    if (ghost) {
+      const gdx = ghost.x - player.x, gdy = ghost.y - player.y;
+      nearestLargerDist = Math.min(nearestLargerDist, Math.sqrt(gdx*gdx + gdy*gdy));
+    }
+    if (nearestLargerDist < 320) {
+      const intensity = Math.max(0, 1 - nearestLargerDist / 320);
+      playHeartbeat(intensity);
+      heartbeatTimer = 0.25 + (1 - intensity) * 0.55;
+    } else {
+      heartbeatTimer = 0.6;
+    }
   }
 
   // Particles
@@ -664,22 +786,47 @@ function updatePlayerMovement(dt) {
 function updateBot(bot, dt) {
   if (bot.stunTimer > 0) return;
 
+  bot.chasingPlayer = false;
   bot.wanderTimer -= dt;
 
-  // Find nearest threat and target
+  // Bounty hunters: always chase the player at 1.4× speed, never flee
+  if (bot.isBountyHunter) {
+    bot.targetX = player.x;
+    bot.targetY = player.y;
+    bot.chasingPlayer = true;
+    const bdx = bot.targetX - bot.x, bdy = bot.targetY - bot.y;
+    const bdist = Math.sqrt(bdx*bdx + bdy*bdy);
+    if (bdist > 4) {
+      const spd = (BASE_SPEEDS[bot.denomIdx] || 100) * 0.72 * 1.4;
+      bot.x += (bdx / bdist) * spd * dt;
+      bot.y += (bdy / bdist) * spd * dt;
+    }
+    const br = denomRadius(bot.denomIdx);
+    bot.x = Math.max(br, Math.min(WORLD_W - br, bot.x));
+    bot.y = Math.max(br, Math.min(WORLD_H - br, bot.y));
+    return;
+  }
+
+  // Check if player is near evolution (>80%) — amps up bot aggression range
+  const denom = DENOMINATIONS[player.denomIdx];
+  const ptotal = playerTotalValue();
+  const prog = denom.evolveAt === Infinity ? 1 : Math.min(1, (ptotal - denom.value) / (denom.evolveAt - denom.value));
+  const playerNearEvo = prog > 0.8;
+  const chaseRange = playerNearEvo ? 510 : 300;
+
   let nearestPrey = null, nearestPreyDist = 9999;
   let nearestThreat = null, nearestThreatDist = 9999;
 
-  // Check player
+  // Evaluate player
   const pdx = player.x - bot.x, pdy = player.y - bot.y;
   const pdist = Math.sqrt(pdx*pdx + pdy*pdy);
   if (player.denomIdx > bot.denomIdx && pdist < 350) {
     if (pdist < nearestThreatDist) { nearestThreat = player; nearestThreatDist = pdist; }
-  } else if (bot.denomIdx > player.denomIdx && pdist < 300) {
+  } else if (bot.denomIdx > player.denomIdx && pdist < chaseRange) {
     if (pdist < nearestPreyDist) { nearestPrey = player; nearestPreyDist = pdist; }
   }
 
-  // Check other bots
+  // Evaluate other bots
   bots.forEach(other => {
     if (other === bot) return;
     const dx = other.x - bot.x, dy = other.y - bot.y;
@@ -691,33 +838,40 @@ function updateBot(bot, dt) {
     }
   });
 
+  bot.chasingPlayer = (nearestPrey === player);
+
   let tx = bot.targetX, ty = bot.targetY;
 
   if (nearestThreat && nearestThreatDist < 300) {
     // Flee
     tx = bot.x - (nearestThreat.x - bot.x) * 3;
     ty = bot.y - (nearestThreat.y - bot.y) * 3;
-  } else if (nearestPrey && nearestPreyDist < 280) {
+  } else if (nearestPrey) {
     // Chase
     tx = nearestPrey.x;
     ty = nearestPrey.y;
   } else {
-    // Wander toward loose money or random target
+    // Wander — high-denom bots (≥$5 bill) guard high-value center bills
     if (bot.wanderTimer <= 0) {
-      // Find nearby loose money
-      let closest = null, closestDist = 9999;
+      let best = null, bestScore = -1;
       looseMoney.forEach(lm => {
+        if (lm.denomIdx > bot.denomIdx) return;
         const dx = lm.x - bot.x, dy = lm.y - bot.y;
         const d = Math.sqrt(dx*dx + dy*dy);
-        if (d < closestDist) { closestDist = d; closest = lm; }
+        if (d > 650) return;
+        // High-denom bots heavily favor high-value bills
+        const valBonus = bot.denomIdx >= 5 ? (lm.denomIdx + 1) * 5 : (lm.denomIdx + 1);
+        const score = valBonus / (d + 10);
+        if (score > bestScore) { bestScore = score; best = lm; }
       });
-      if (closest && closestDist < 400) {
-        bot.targetX = closest.x; bot.targetY = closest.y;
+      if (best) {
+        bot.targetX = best.x; bot.targetY = best.y;
+        bot.wanderTimer = bot.denomIdx >= 5 ? 3.5 + Math.random() * 3 : 1.5 + Math.random() * 2;
       } else {
         bot.targetX = 100 + Math.random() * (WORLD_W - 200);
         bot.targetY = 100 + Math.random() * (WORLD_H - 200);
+        bot.wanderTimer = 1.5 + Math.random() * 2;
       }
-      bot.wanderTimer = 1.5 + Math.random() * 2;
     }
     tx = bot.targetX; ty = bot.targetY;
   }
@@ -730,10 +884,165 @@ function updateBot(bot, dt) {
     bot.y += (bdy / bdist) * spd * dt;
   }
 
-  // Wall clamp
   const r = denomRadius(bot.denomIdx);
   bot.x = Math.max(r, Math.min(WORLD_W - r, bot.x));
   bot.y = Math.max(r, Math.min(WORLD_H - r, bot.y));
+}
+
+function updateGhost(dt) {
+  ghost.wanderTimer -= dt;
+  if (ghost.wanderTimer <= 0) {
+    // Target the highest-value entity on the board
+    let allTargets = [{ x: player.x, y: player.y, val: playerTotalValue() },
+      ...bots.map(b => ({ x: b.x, y: b.y, val: b.value }))];
+    allTargets.sort((a, b) => b.val - a.val);
+    const top = allTargets[0];
+    ghost.targetX = top.x + (Math.random() - 0.5) * 120;
+    ghost.targetY = top.y + (Math.random() - 0.5) * 120;
+    ghost.wanderTimer = 1.5 + Math.random() * 2;
+  }
+  const gdx = ghost.targetX - ghost.x, gdy = ghost.targetY - ghost.y;
+  const gdist = Math.sqrt(gdx*gdx + gdy*gdy);
+  if (gdist > 10) {
+    ghost.x += (gdx / gdist) * 95 * dt;
+    ghost.y += (gdy / gdist) * 95 * dt;
+  }
+  ghost.x = Math.max(60, Math.min(WORLD_W - 60, ghost.x));
+  ghost.y = Math.max(60, Math.min(WORLD_H - 60, ghost.y));
+
+  // Ghost eats player (ignores safe zone, is unstoppable)
+  if (!inSafeZone(player.x, player.y)) {
+    const pdx = ghost.x - player.x, pdy = ghost.y - player.y;
+    const gr = denomRadius(ghost.denomIdx);
+    if (pdx*pdx + pdy*pdy < (gr + playerRadius()) * (gr + playerRadius())) {
+      if (player.armorHits > 0) {
+        player.armorHits--;
+        stunTimer = 1.5;
+        spawnParticles(player.x, player.y, '#ff0000', 12);
+        playBounce();
+        const scatterN = Math.min(player.cloud.length, 3);
+        for (let si = 0; si < scatterN; si++) {
+          if (!player.cloud.length) break;
+          const ri = Math.floor(Math.random() * player.cloud.length);
+          const sc = player.cloud.splice(ri, 1)[0];
+          const ang = Math.random() * Math.PI * 2;
+          looseMoney.push({
+            x: Math.max(50, Math.min(WORLD_W-50, player.x + Math.cos(ang) * 80)),
+            y: Math.max(50, Math.min(WORLD_H-50, player.y + Math.sin(ang) * 80)),
+            denomIdx: sc.denomIdx, value: sc.value, r: 6 + sc.denomIdx * 1.8, age: 0,
+          });
+        }
+      } else {
+        gameOver(false);
+        return;
+      }
+    }
+  }
+
+  // Ghost eats bots it touches (respawns them as small bots)
+  bots.forEach(bot => {
+    if (bot.stunTimer > 0) return;
+    const dx = ghost.x - bot.x, dy = ghost.y - bot.y;
+    const gr = denomRadius(ghost.denomIdx);
+    if (dx*dx + dy*dy < (gr + denomRadius(bot.denomIdx)) * (gr + denomRadius(bot.denomIdx))) {
+      spawnParticles(bot.x, bot.y, DENOMINATIONS[bot.denomIdx].color, 10);
+      Object.assign(bot, createBot(Math.floor(Math.random() * 3)));
+    }
+  });
+}
+
+function drawGhost() {
+  if (!ghost) return;
+  const d = DENOMINATIONS[ghost.denomIdx];
+  const r = denomRadius(ghost.denomIdx);
+  const now = Date.now();
+  ctx.save();
+  ctx.translate(ghost.x, ghost.y);
+
+  // Pulsing red danger aura
+  const pulseA = 0.25 + Math.sin(now * 0.004) * 0.12;
+  ctx.beginPath();
+  ctx.arc(0, 0, r + 24, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(255,30,30,${pulseA})`;
+  ctx.fill();
+
+  // Ghostly flicker
+  ctx.globalAlpha = 0.75 + Math.sin(now * 0.005) * 0.2;
+  const w = r * 2.2, h = r * 1.4;
+  ctx.shadowColor = '#ffd700';
+  ctx.shadowBlur = 28;
+  ctx.fillStyle = d.color;
+  ctx.strokeStyle = '#ffd700';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.roundRect(-w/2, -h/2, w, h, 8);
+  ctx.fill(); ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = d.textColor;
+  ctx.font = `bold ${r * 0.48}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(d.symbol, 0, -3);
+
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#ff4444';
+  ctx.font = 'bold 12px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('👻 GHOST', 0, r + 5);
+  ctx.restore();
+}
+
+function drawWantedIndicator() {
+  if (!wantedBots || wantedBots.length === 0) return;
+  const vw = canvas.width, vh = canvas.height;
+
+  // Find nearest wanted threat
+  let nearest = null, nearestDist = Infinity;
+  wantedBots.forEach(wb => {
+    const dx = wb.x - player.x, dy = wb.y - player.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist < nearestDist) { nearestDist = dist; nearest = wb; }
+  });
+  if (!nearest) return;
+
+  const dx = nearest.x - player.x, dy = nearest.y - player.y;
+  const angle = Math.atan2(dy, dx);
+  const margin = 55;
+  const cx = vw / 2, cy = vh / 2;
+  const hw = vw / 2 - margin, hh = vh / 2 - margin;
+  const ta = Math.abs(Math.cos(angle)), tb = Math.abs(Math.sin(angle));
+  const t = (ta > 0 && tb > 0) ? Math.min(hw / ta, hh / tb) : (ta > 0 ? hw / ta : hh / tb);
+  const ax = cx + Math.cos(angle) * t, ay = cy + Math.sin(angle) * t;
+
+  const pulse = 0.65 + Math.sin(Date.now() * 0.009) * 0.35;
+  ctx.save();
+  ctx.globalAlpha = pulse;
+
+  // WANTED label above arrow
+  ctx.font = 'bold 12px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = '#ff2222';
+  const lx = ax + Math.cos(angle + Math.PI) * 28;
+  const ly = ay + Math.sin(angle + Math.PI) * 28;
+  ctx.fillText('⚠ WANTED', lx, ly - 4);
+
+  // Arrow pointing at threat
+  ctx.translate(ax, ay);
+  ctx.rotate(angle);
+  ctx.fillStyle = '#ff2222';
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(18, 0);
+  ctx.lineTo(-10, -11);
+  ctx.lineTo(-10, 11);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+
+  ctx.restore();
 }
 
 function spawnParticles(x, y, color, count) {
@@ -770,6 +1079,20 @@ function gameOver(win) {
   if (win) {
     document.getElementById('win-screen').style.display = 'flex';
   } else {
+    // Drop half cloud coins on the floor at death location (others can scavenge)
+    const dropCount = Math.ceil(player.cloud.length / 2);
+    const toDrop = [...player.cloud].sort(() => Math.random() - 0.5).slice(0, dropCount);
+    toDrop.forEach(c => {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 20 + Math.random() * 90;
+      looseMoney.push({
+        x: Math.max(50, Math.min(WORLD_W - 50, player.x + Math.cos(ang) * dist)),
+        y: Math.max(50, Math.min(WORLD_H - 50, player.y + Math.sin(ang) * dist)),
+        denomIdx: c.denomIdx, value: c.value,
+        r: 6 + c.denomIdx * 1.8, age: 0,
+      });
+    });
+
     const total = playerTotalValue();
     const allEntities = [{ denomIdx: player.denomIdx, value: total, isPlayer: true },
       ...bots.map(b => ({ denomIdx: b.denomIdx, value: b.value }))];
@@ -808,6 +1131,27 @@ function render() {
   for (let x = 0; x < WORLD_W; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD_H); ctx.stroke(); }
   for (let y = 0; y < WORLD_H; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD_W, y); ctx.stroke(); }
 
+  // Debt zones (drawn under everything)
+  debtZones.forEach(dz => {
+    ctx.save();
+    const pulse = 0.12 + Math.sin(Date.now() * 0.0025) * 0.05;
+    ctx.beginPath();
+    ctx.arc(dz.x, dz.y, dz.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(200,0,0,${pulse})`;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,60,60,0.5)';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([8, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255,100,100,0.75)';
+    ctx.font = 'bold 12px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('💸 DEBT ZONE', dz.x, dz.y);
+    ctx.restore();
+  });
+
   // Safe zone
   drawSafeZone();
 
@@ -819,6 +1163,9 @@ function render() {
 
   // Bots
   bots.forEach(b => drawEntity(b));
+
+  // Ghost entity
+  drawGhost();
 
   // Cloud coins (drawn behind player)
   drawCloudCoins();
@@ -843,6 +1190,9 @@ function render() {
   ctx.strokeRect(3, 3, WORLD_W - 6, WORLD_H - 6);
 
   ctx.restore();
+
+  // Screen-space overlays
+  drawWantedIndicator();
 
   // Minimap
   drawMinimap();
@@ -1057,6 +1407,14 @@ function drawEntity(e, isPlayer = false) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillText(isPlayer ? 'YOU' : '🤖', 0, r + 3);
+  }
+
+  // Bounty hunter marker — red 🎯 above
+  if (e.isBountyHunter && !isPlayer) {
+    ctx.font = '13px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('🎯', 0, -r - 2);
   }
 
   ctx.restore();
