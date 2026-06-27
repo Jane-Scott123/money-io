@@ -59,6 +59,12 @@
 
   /* Controls hint */
   #controls-hint { position: fixed; bottom: 16px; left: 16px; background: rgba(0,0,0,0.5); border-radius: 8px; padding: 6px 10px; color: #aaa; font-size: 10px; pointer-events: none; }
+
+  /* Game canvas — fixed behind all UI */
+  #gameCanvas { position: fixed; top: 0; left: 0; z-index: 0; display: block; }
+
+  /* Error display */
+  #err-display { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #900; color: #fff; padding: 20px; border-radius: 10px; font-size: 14px; z-index: 999; display: none; max-width: 80vw; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -121,9 +127,17 @@
 <div id="evo-flash"></div>
 <div id="evo-text"></div>
 
+<!-- Error display (hidden unless something breaks) -->
+<div id="err-display"></div>
+
 <canvas id="gameCanvas"></canvas>
 
 <script>
+function showErr(msg) {
+  const el = document.getElementById('err-display');
+  if (el) { el.style.display = 'block'; el.textContent = '⚠ ' + msg; }
+}
+
 // ===================== CONSTANTS =====================
 const DENOMINATIONS = [
   { name: 'Penny',       symbol: '¢1',  emoji: '🪙', value: 1,      evolveAt: 5,      color: '#b87333', textColor: '#5c3a1e', radius: 14 },
@@ -387,9 +401,9 @@ function gameLoop(ts) {
   const dt = lastTime === 0 ? 0.016 : Math.min((ts - lastTime) / 1000, 0.05);
   lastTime = ts;
 
-  try { update(dt); } catch(e) { console.error('update error:', e); }
-  try { render(); } catch(e) { console.error('render error:', e); }
-  try { updateHUD(); } catch(e) {}
+  try { update(dt); } catch(e) { showErr('update: ' + e.message); console.error(e); }
+  try { render(); } catch(e) { showErr('render: ' + e.message); console.error(e); }
+  try { updateHUD(); } catch(e) { console.error(e); }
 
   requestAnimationFrame(gameLoop);
 }
@@ -1146,12 +1160,18 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('keyup', e => { keys[e.code] = false; });
 
-// ===================== INIT =====================
-canvas = document.getElementById('gameCanvas');
-ctx = canvas.getContext('2d');
-minimapCanvas = document.getElementById('hud-minimap');
-minimapCtx = minimapCanvas.getContext('2d');
+function screenToWorld(cx, cy) {
+  return { x: cx + camera.x, y: cy + camera.y };
+}
 
+// ===================== RESIZE =====================
+function resize() {
+  if (!canvas) return;
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+
+// ===================== INIT (after DOM ready) =====================
 // polyfill roundRect for older browsers
 if (!CanvasRenderingContext2D.prototype.roundRect) {
   CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
@@ -1169,49 +1189,50 @@ if (!CanvasRenderingContext2D.prototype.roundRect) {
   };
 }
 
-// Touch controls
-canvas.addEventListener('touchstart', e => {
-  e.preventDefault();
-  const t = e.touches[0];
-  touchTarget = screenToWorld(t.clientX, t.clientY);
+window.addEventListener('DOMContentLoaded', () => {
+  canvas = document.getElementById('gameCanvas');
+  if (!canvas) { showErr('Canvas element not found'); return; }
 
-  // Double-tap for boost
-  const now = Date.now();
-  if (now - (canvas._lastTap || 0) < 300 && gameRunning && mintBoostCooldown <= 0) {
-    const boostLv = getUpgradeLevel('boost');
-    if (boostLv > 0) {
-      mintBoostActive = 1.5 + boostLv * 0.3;
-      mintBoostCooldown = 10;
-      playTone(880, 0.15, 'square', 0.15);
+  ctx = canvas.getContext('2d');
+  if (!ctx) { showErr('Could not get 2D canvas context'); return; }
+
+  minimapCanvas = document.getElementById('hud-minimap');
+  minimapCtx = minimapCanvas ? minimapCanvas.getContext('2d') : null;
+
+  resize();
+  window.addEventListener('resize', resize);
+
+  // Touch controls
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    touchTarget = screenToWorld(t.clientX, t.clientY);
+    const now = Date.now();
+    if (now - (canvas._lastTap || 0) < 300 && gameRunning && mintBoostCooldown <= 0) {
+      const boostLv = getUpgradeLevel('boost');
+      if (boostLv > 0) {
+        mintBoostActive = 1.5 + boostLv * 0.3;
+        mintBoostCooldown = 10;
+        playTone(880, 0.15, 'square', 0.15);
+      }
     }
-  }
-  canvas._lastTap = now;
-}, { passive: false });
+    canvas._lastTap = now;
+  }, { passive: false });
 
-canvas.addEventListener('touchmove', e => {
-  e.preventDefault();
-  const t = e.touches[0];
-  touchTarget = screenToWorld(t.clientX, t.clientY);
-}, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    touchTarget = screenToWorld(t.clientX, t.clientY);
+  }, { passive: false });
 
-canvas.addEventListener('touchend', e => {
-  e.preventDefault();
-  if (e.touches.length === 0) touchTarget = null;
-}, { passive: false });
+  canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    if (e.touches.length === 0) touchTarget = null;
+  }, { passive: false });
 
-function screenToWorld(cx, cy) {
-  return { x: cx + camera.x, y: cy + camera.y };
-}
-
-// ===================== RESIZE =====================
-function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-}
-window.addEventListener('resize', resize);
-resize();
-updateStartGold();
-showHUD(false);
+  updateStartGold();
+  showHUD(false);
+});
 </script>
 </body>
 </html>
