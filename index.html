@@ -201,6 +201,7 @@ let baitCooldown = 0;
 let stunTimer = 0;
 let ghost = null;
 let debtZones = [];
+let debtSafeZones = [];  // yellow — repels hunters, but fast money drain
 let heartbeatTimer = 0;
 let wantedBots = [];
 let dashActive = 0;       // seconds remaining on double-tap dash
@@ -358,38 +359,26 @@ function createBot(denomIdx = null) {
     armorHits: 0,
     face: makeFace(),
     isBot: true,
+    cloudCoins: [],  // orbiting cloud (stealable)
+    stealTimer: 0,
   };
 }
 
-// Pick a loose money denomination based on distance from center.
-// Coins cluster at edges; small bills in mid; large bills near center.
-// Weights: index → [penny, nickel, dime, quarter, $1, $5, $10, $20, $50]
-function pickLooseDenomForPosition(cx, cy) {
-  const distFromCenter = Math.hypot(cx - WORLD_W/2, cy - WORLD_H/2);
-  const maxDist = Math.hypot(WORLD_W/2, WORLD_H/2);
-  const t = distFromCenter / maxDist; // 0 = center, 1 = corner
-  // t=1 (edge): mostly pennies/nickels
-  // t=0 (center): higher bills
+// Pick denomination purely by rarity (higher value = rarer). No position bias.
+// cumulative thresholds for denomIdx 0–11:
+const DENOM_RARITY = [0.28, 0.48, 0.64, 0.76, 0.85, 0.91, 0.95, 0.975, 0.990, 0.997, 0.9993, 1.0];
+function pickLooseDenom() {
   const r = Math.random();
-  if (t > 0.75) {
-    // Edge zone: pennies and nickels
-    return r < 0.65 ? 0 : r < 0.9 ? 1 : 2;
-  } else if (t > 0.5) {
-    // Mid-edge: pennies, nickels, dimes, quarters
-    return r < 0.35 ? 0 : r < 0.6 ? 1 : r < 0.8 ? 2 : 3;
-  } else if (t > 0.3) {
-    // Mid zone: dimes through $5 bills
-    return r < 0.2 ? 1 : r < 0.45 ? 2 : r < 0.65 ? 3 : r < 0.82 ? 4 : r < 0.94 ? 5 : 6;
-  } else {
-    // Center: $5 bills through $50 bills (rare higher)
-    return r < 0.2 ? 4 : r < 0.45 ? 5 : r < 0.68 ? 6 : r < 0.84 ? 7 : r < 0.95 ? 8 : 9;
+  for (let i = 0; i < DENOM_RARITY.length; i++) {
+    if (r < DENOM_RARITY[i]) return i;
   }
+  return 11;
 }
 
 function createLooseMoney() {
   const x = 80 + Math.random() * (WORLD_W - 160);
   const y = 80 + Math.random() * (WORLD_H - 160);
-  const di = inSafeZone(x, y) ? 0 : pickLooseDenomForPosition(x, y);
+  const di = inSafeZone(x, y) ? 0 : pickLooseDenom();
   const safeX = inSafeZone(x, y) ? 100 : x;
   const safeY = inSafeZone(x, y) ? 100 : y;
   return { x: safeX, y: safeY, denomIdx: di, value: DENOMINATIONS[di].value, r: 6 + di * 1.8, age: 0 };
@@ -441,15 +430,25 @@ function startGame() {
     isGhost: true, chasingPlayer: true,
   };
 
-  // Debt zones — red patches that drain cloud coins on contact
+  // Red debt zones — drain cloud slowly
   debtZones = [];
-  const dzCount = 4 + Math.floor(Math.random() * 2);
-  for (let i = 0; i < dzCount; i++) {
+  for (let i = 0; i < 4; i++) {
     debtZones.push({
       x: 300 + Math.random() * (WORLD_W - 600),
       y: 200 + Math.random() * (WORLD_H - 400),
-      r: 90 + Math.random() * 80,
-      drainTimer: 2,
+      r: 90 + Math.random() * 70,
+      drainTimer: 0.8,
+    });
+  }
+
+  // Yellow debt safe zones — repel bounty hunters but drain money fast
+  debtSafeZones = [];
+  for (let i = 0; i < 3; i++) {
+    debtSafeZones.push({
+      x: 300 + Math.random() * (WORLD_W - 600),
+      y: 200 + Math.random() * (WORLD_H - 400),
+      r: 75 + Math.random() * 50,
+      drainTimer: 0.3,
     });
   }
 
@@ -525,13 +524,19 @@ function update(dt) {
         });
         if (bestId) {
           const lv = getUpgradeLevel(bestId);
+          const refund = Math.floor(upgradeCostCents(UPGRADE_DEFS.find(d=>d.id===bestId), lv - 1) * 0.6);
           matchUpgrades[bestId] = lv - 1;
           if (bestId === 'armor') player.armorHits = Math.min(player.armorHits, matchUpgrades.armor || 0);
+          // Refund most of upgrade cost back to cloud
+          if (refund > 0) addToCloud(player.x, player.y, Math.max(0, makeDenomIdx(refund)), refund);
           spawnParticles(player.x, player.y, '#ff4400', 8);
           playBounce();
         } else if (player.denomIdx > 0) {
-          // No upgrades left — denomination drops
+          // No upgrades left — denomination drops, value returns to cloud
+          const lostValue = DENOMINATIONS[player.denomIdx].value;
           player.denomIdx--;
+          const refundDi = Math.max(0, player.denomIdx);
+          addToCloud(player.x, player.y, refundDi, Math.floor(lostValue * 0.7));
           spawnParticles(player.x, player.y, '#ff0000', 14);
           playBounce();
         }
@@ -613,9 +618,17 @@ function update(dt) {
       if (lm.denomIdx > bot.denomIdx) continue;
       const dx = bot.x - lm.x, dy = bot.y - lm.y;
       if (dx*dx + dy*dy < botEatR*botEatR) {
-        bot.value += lm.value;
+        // 40% of eaten money goes to bot's cloud (stealable), 60% to value
+        if (Math.random() < 0.4 && bot.cloudCoins.length < 18) {
+          bot.cloudCoins.push({
+            value: lm.value, denomIdx: lm.denomIdx,
+            angle: Math.random() * Math.PI * 2,
+            orbitSpeed: (0.5 + Math.random() * 0.9) * (Math.random() < 0.5 ? 1 : -1),
+          });
+        } else {
+          bot.value += lm.value;
+        }
         looseMoney.splice(i, 1);
-        // restock handled by timer, no immediate respawn
       }
     }
 
@@ -624,27 +637,52 @@ function update(dt) {
       bot.denomIdx++;
     }
 
-    // Player eats bot → bot's value goes to cloud
+    // Player eats bot → bot's value + cloud go to player
     if (!pInSafe && player.denomIdx > bot.denomIdx) {
       const dx = player.x - bot.x, dy = player.y - bot.y;
       const r = eatR + denomRadius(bot.denomIdx) * 0.5;
       if (dx*dx + dy*dy < r*r) {
-        // Scatter bot value into several cloud coins
         const denomD = DENOMINATIONS[bot.denomIdx];
         const count = Math.min(8, Math.max(1, Math.floor(bot.value / denomD.value)));
         for (let k = 0; k < count; k++) {
-          const spread = 30;
-          addToCloud(
-            bot.x + (Math.random()-0.5)*spread,
-            bot.y + (Math.random()-0.5)*spread,
-            bot.denomIdx,
-            Math.floor(bot.value / count)
-          );
+          addToCloud(bot.x + (Math.random()-0.5)*30, bot.y + (Math.random()-0.5)*30,
+            bot.denomIdx, Math.floor(bot.value / count));
         }
+        // Also absorb bot's cloud coins
+        bot.cloudCoins.forEach(cc => addToCloud(bot.x, bot.y, cc.denomIdx, cc.value));
         playEatPlayer(player.denomIdx);
         spawnParticles(bot.x, bot.y, denomD.color, 14);
         Object.assign(bot, createBot(0));
         return;
+      }
+    }
+
+    // Cloud stealing: entities in close proximity steal coins across clouds
+    {
+      const stealDx = player.x - bot.x, stealDy = player.y - bot.y;
+      const stealR = playerRadius() + denomRadius(bot.denomIdx) + 30;
+      if (stealDx*stealDx + stealDy*stealDy < stealR*stealR) {
+        bot.stealTimer -= dt;
+        if (bot.stealTimer <= 0) {
+          bot.stealTimer = 0.9;
+          if (bot.denomIdx > player.denomIdx && player.cloud.length > 0) {
+            // Larger bot steals from player cloud
+            const ri = Math.floor(Math.random() * player.cloud.length);
+            const stolen = player.cloud.splice(ri, 1)[0];
+            if (bot.cloudCoins.length < 18) {
+              bot.cloudCoins.push({ value: stolen.value, denomIdx: stolen.denomIdx,
+                angle: Math.random()*Math.PI*2, orbitSpeed: (0.5+Math.random()*0.8)*(Math.random()<0.5?1:-1) });
+            }
+            spawnParticles(player.x, player.y, DENOMINATIONS[stolen.denomIdx].color, 3);
+          } else if (player.denomIdx >= bot.denomIdx && bot.cloudCoins.length > 0) {
+            // Player steals from bot cloud (same or larger denom, proximity only)
+            const ri = Math.floor(Math.random() * bot.cloudCoins.length);
+            const stolen = bot.cloudCoins.splice(ri, 1)[0];
+            addToCloud(bot.x, bot.y, stolen.denomIdx, stolen.value);
+            spawnParticles(bot.x, bot.y, DENOMINATIONS[stolen.denomIdx].color, 3);
+            playChing(stolen.denomIdx);
+          }
+        }
       }
     }
 
@@ -700,31 +738,67 @@ function update(dt) {
     if (hit) baits.splice(bi, 1);
   }
 
-  // Debt zones: drain one cloud coin per 1.5s while inside
-  if (player.cloud.length > 0) {
-    debtZones.forEach(dz => {
-      const dx = player.x - dz.x, dy = player.y - dz.y;
-      if (dx*dx + dy*dy < dz.r * dz.r) {
-        dz.drainTimer -= dt;
-        if (dz.drainTimer <= 0) {
-          dz.drainTimer = 1.5;
-          const sorted = [...player.cloud].sort((a, b) => a.value - b.value);
-          const coin = sorted[0];
-          player.cloud = player.cloud.filter(c => c !== coin);
-          const ang = Math.random() * Math.PI * 2;
-          looseMoney.push({
-            x: Math.max(50, Math.min(WORLD_W-50, player.x + Math.cos(ang) * (40 + Math.random()*50))),
-            y: Math.max(50, Math.min(WORLD_H-50, player.y + Math.sin(ang) * (40 + Math.random()*50))),
-            denomIdx: coin.denomIdx, value: coin.value,
-            r: 6 + coin.denomIdx * 1.8, age: 0,
-          });
-          playDebtDrain();
-        }
-      } else {
-        dz.drainTimer = Math.min(dz.drainTimer + dt * 0.5, 1.5);
-      }
+  // Helper: drain one cloud coin and drop it on floor
+  function drainOneCloudCoin(zone) {
+    if (player.cloud.length === 0) return;
+    const sorted = [...player.cloud].sort((a, b) => a.value - b.value);
+    const coin = sorted[0];
+    player.cloud = player.cloud.filter(c => c !== coin);
+    const ang = Math.random() * Math.PI * 2;
+    looseMoney.push({
+      x: Math.max(50, Math.min(WORLD_W-50, player.x + Math.cos(ang) * (40 + Math.random()*50))),
+      y: Math.max(50, Math.min(WORLD_H-50, player.y + Math.sin(ang) * (40 + Math.random()*50))),
+      denomIdx: coin.denomIdx, value: coin.value,
+      r: 6 + coin.denomIdx * 1.8, age: 0,
     });
+    playDebtDrain();
   }
+
+  // Red debt zones: drain one coin every 0.8s
+  debtZones.forEach(dz => {
+    const dx = player.x - dz.x, dy = player.y - dz.y;
+    if (dx*dx + dy*dy < dz.r * dz.r) {
+      dz.drainTimer -= dt;
+      if (dz.drainTimer <= 0) { dz.drainTimer = 0.8; drainOneCloudCoin(dz); }
+    } else { dz.drainTimer = Math.min(dz.drainTimer + dt * 0.4, 0.8); }
+  });
+
+  // Yellow debt safe zones: drain very fast (0.3s), but repel bounty hunters
+  debtSafeZones.forEach(dz => {
+    const dx = player.x - dz.x, dy = player.y - dz.y;
+    if (dx*dx + dy*dy < dz.r * dz.r) {
+      dz.drainTimer -= dt;
+      if (dz.drainTimer <= 0) {
+        dz.drainTimer = 0.3;
+        if (player.cloud.length > 0) {
+          drainOneCloudCoin(dz);
+        } else {
+          // Cloud empty — unupgrade, refund to cloud
+          let bestId = null, bestRefund = -1;
+          UPGRADE_DEFS.forEach(def => {
+            const lv = getUpgradeLevel(def.id);
+            if (lv > 0) {
+              const cost = upgradeCostCents(def, lv - 1);
+              if (cost > bestRefund) { bestRefund = cost; bestId = def.id; }
+            }
+          });
+          if (bestId) {
+            const lv = getUpgradeLevel(bestId);
+            const refund = Math.floor(upgradeCostCents(UPGRADE_DEFS.find(d=>d.id===bestId), lv-1) * 0.7);
+            matchUpgrades[bestId] = lv - 1;
+            if (bestId === 'armor') player.armorHits = Math.min(player.armorHits, matchUpgrades.armor || 0);
+            if (refund > 0) addToCloud(player.x, player.y, Math.max(0, makeDenomIdx(refund)), refund);
+            spawnParticles(player.x, player.y, '#ffcc00', 8);
+          } else if (player.denomIdx > 0) {
+            const lostValue = DENOMINATIONS[player.denomIdx].value;
+            player.denomIdx--;
+            addToCloud(player.x, player.y, Math.max(0, player.denomIdx), Math.floor(lostValue * 0.7));
+            spawnParticles(player.x, player.y, '#ffcc00', 12);
+          }
+        }
+      }
+    } else { dz.drainTimer = Math.min(dz.drainTimer + dt * 0.5, 0.3); }
+  });
 
   // Collect WANTED bots (larger bots chasing player, or bounty hunters nearby)
   wantedBots = bots.filter(b => {
@@ -772,9 +846,11 @@ function update(dt) {
 // Update cloud coin orbits
 function updateCloud(dt) {
   const pr = playerRadius();
+  const maxOrbit = pr + 68; // hard cap — coins get denser, not further
   player.cloud.forEach(c => {
     c.angle += c.orbitSpeed * dt;
-    c.orbitDist = pr + 22 + player.cloud.indexOf(c) * 4;
+    const idx = player.cloud.indexOf(c);
+    c.orbitDist = Math.min(maxOrbit, pr + 22 + idx * 3.5);
     // flyIn: animate from spawn position toward orbit
     if (c.flyIn > 0) {
       c.flyIn = Math.max(0, c.flyIn - dt * 3);
@@ -798,7 +874,7 @@ function playerSpeed() {
   const base = BASE_SPEEDS[player.denomIdx] || 100;
   const boost = (mintBoostActive > 0) ? 1.8 : 1;
   const lvBoost = 1 + getUpgradeLevel('speed') * 0.05;
-  const dashBoost = dashActive > 0 ? 2.1 : 1;
+  const dashBoost = dashActive > 0 ? 1.5 : 1;
   return base * boost * lvBoost * dashBoost;
 }
 
@@ -839,14 +915,19 @@ function updateBot(bot, dt) {
   // Bounty hunters: chase player only if larger; flee from safe zone
   if (bot.isBountyHunter) {
     const playerInSafe = inSafeZone(player.x, player.y);
+    const playerInDebtSafe = debtSafeZones.some(dz => {
+      const ddx = player.x - dz.x, ddy = player.y - dz.y;
+      return ddx*ddx + ddy*ddy < dz.r * dz.r;
+    });
     const canEatPlayer = bot.denomIdx > player.denomIdx;
 
-    if (playerInSafe) {
-      // Flee away from safe zone center
-      const szCx = SAFE_ZONE.x + SAFE_ZONE.w / 2;
-      const szCy = SAFE_ZONE.y + SAFE_ZONE.h / 2;
-      bot.targetX = bot.x + (bot.x - szCx) * 3;
-      bot.targetY = bot.y + (bot.y - szCy) * 3;
+    if (playerInSafe || playerInDebtSafe) {
+      // Flee away from whichever safe zone the player is in
+      const fleeFrom = playerInSafe
+        ? { x: SAFE_ZONE.x + SAFE_ZONE.w/2, y: SAFE_ZONE.y + SAFE_ZONE.h/2 }
+        : debtSafeZones.find(dz => { const ddx=player.x-dz.x,ddy=player.y-dz.y; return ddx*ddx+ddy*ddy<dz.r*dz.r; });
+      bot.targetX = bot.x + (bot.x - fleeFrom.x) * 3;
+      bot.targetY = bot.y + (bot.y - fleeFrom.y) * 3;
       bot.chasingPlayer = false;
     } else if (canEatPlayer) {
       bot.targetX = player.x;
@@ -955,6 +1036,43 @@ function updateBot(bot, dt) {
   const r = denomRadius(bot.denomIdx);
   bot.x = Math.max(r, Math.min(WORLD_W - r, bot.x));
   bot.y = Math.max(r, Math.min(WORLD_H - r, bot.y));
+
+  // Update cloud coin orbit angles
+  if (bot.cloudCoins) {
+    bot.cloudCoins.forEach(cc => { cc.angle += cc.orbitSpeed * dt; });
+  }
+}
+
+function drawBotCloud(bot) {
+  if (!bot.cloudCoins || bot.cloudCoins.length === 0) return;
+  const br = denomRadius(bot.denomIdx);
+  const orbitR = Math.min(br + 16, br + 10 + bot.cloudCoins.length * 0.5);
+  bot.cloudCoins.forEach((cc, i) => {
+    const cx = bot.x + Math.cos(cc.angle) * orbitR;
+    const cy = bot.y + Math.sin(cc.angle) * orbitR;
+    const r = 4 + cc.denomIdx * 0.8;
+    const d = DENOMINATIONS[cc.denomIdx];
+    ctx.save();
+    ctx.globalAlpha = 0.75;
+    ctx.translate(cx, cy);
+    if (d.isBill) {
+      ctx.fillStyle = d.color;
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.roundRect(-r, -r*0.6, r*2, r*1.2, 2);
+      ctx.fill(); ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI*2);
+      ctx.fillStyle = d.color;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+    }
+    ctx.restore();
+  });
 }
 
 function updateGhost(dt) {
@@ -1199,7 +1317,7 @@ function render() {
   for (let x = 0; x < WORLD_W; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD_H); ctx.stroke(); }
   for (let y = 0; y < WORLD_H; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD_W, y); ctx.stroke(); }
 
-  // Debt zones (drawn under everything)
+  // Red debt zones
   debtZones.forEach(dz => {
     ctx.save();
     const pulse = 0.12 + Math.sin(Date.now() * 0.0025) * 0.05;
@@ -1220,6 +1338,30 @@ function render() {
     ctx.restore();
   });
 
+  // Yellow debt safe zones (repel hunters, faster drain)
+  debtSafeZones.forEach(dz => {
+    ctx.save();
+    const pulse = 0.13 + Math.sin(Date.now() * 0.003 + 1) * 0.06;
+    ctx.beginPath();
+    ctx.arc(dz.x, dz.y, dz.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(210,180,0,${pulse})`;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,220,0,0.6)';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([8, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255,230,50,0.85)';
+    ctx.font = 'bold 11px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('⚡ DEBT SAFE', dz.x, dz.y - 8);
+    ctx.fillStyle = 'rgba(255,200,50,0.7)';
+    ctx.font = '10px Arial';
+    ctx.fillText('hunters flee • costs money', dz.x, dz.y + 8);
+    ctx.restore();
+  });
+
   // Safe zone
   drawSafeZone();
 
@@ -1228,6 +1370,9 @@ function render() {
 
   // Baits
   baits.forEach(b => drawBait(b));
+
+  // Bot clouds (orbiting coins above bots)
+  bots.forEach(bot => drawBotCloud(bot));
 
   // Bots
   bots.forEach(b => drawEntity(b));
@@ -1705,10 +1850,10 @@ const DASH_KEYS = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','KeyA'
 document.addEventListener('keydown', e => {
   keys[e.code] = true;
 
-  // Double-tap movement key = speed dash (burns money)
-  if (DASH_KEYS.has(e.code) && gameRunning && dashActive <= 0) {
+  // Double-tap movement key = speed dash (burns money). !e.repeat = fresh press only.
+  if (DASH_KEYS.has(e.code) && gameRunning && dashActive <= 0 && !e.repeat) {
     const now = Date.now();
-    if (now - (lastKeyTime[e.code] || 0) < 260) {
+    if (now - (lastKeyTime[e.code] || 0) < 280) {
       dashActive = 2.5;
       dashDrainTimer = 0;
       playTone(520, 0.12, 'square', 0.14);
