@@ -155,8 +155,10 @@ const DENOMINATIONS = [
   { name: '$10,000 Bill',symbol: '$10K',emoji: '🏆', value: 1000000, evolveAt: Infinity, color: '#000000', textColor: '#ffd700', radius: 90, isBill: true },
 ];
 
-const WORLD_W = 3000;
-const WORLD_H = 2400;
+let WORLD_W = 3000;
+let WORLD_H = 2400;
+const BASE_WORLD_W = 3000;
+const BASE_WORLD_H = 2400;
 const SAFE_ZONE = { x: WORLD_W - 220, y: WORLD_H - 200, w: 200, h: 180 };
 const LOOSE_MONEY_COUNT = 300;
 const BOT_COUNT = 18;
@@ -172,12 +174,15 @@ const BASE_SPEEDS = [210, 200, 195, 185, 175, 160, 148, 138, 125, 112, 100, 90, 
 // ===================== UPGRADE DEFINITIONS =====================
 // costs are in cents (matching the game's value unit)
 const UPGRADE_DEFS = [
-  { id: 'speed',  name: 'Move Speed',       desc: '+5% speed per level',               max: 10, costs: [3,7,14,25,40,60,85,115,150,200] },
-  { id: 'radius', name: 'Eat Radius',       desc: '+8% eat/absorb radius per level',   max: 10, costs: [4,9,18,32,52,78,110,148,195,250] },
-  { id: 'magnet', name: 'Magnetism',        desc: 'Pull loose money toward you',        max: 8,  costs: [5,12,24,44,72,108,154,210] },
-  { id: 'armor',  name: 'Armor',            desc: 'Survive hits from larger players',  max: 5,  costs: [15,35,70,130,220] },
-  { id: 'boost',  name: 'Mint Boost',       desc: 'Space: speed burst, 10s cooldown', max: 5,  costs: [10,22,42,75,120] },
-  { id: 'bait',   name: 'Counterfeit Bait', desc: 'Q: drop decoy that stuns eaters',  max: 5,  costs: [12,28,55,100,165] },
+  { id: 'speed',    name: 'Move Speed',        desc: '+5% speed per level',                        max: 10, costs: [8,20,40,70,110,160,220,300,400,550] },
+  { id: 'radius',   name: 'Eat Radius',        desc: '+8% eat/absorb radius per level',            max: 10, costs: [10,25,50,90,140,210,300,420,580,800] },
+  { id: 'magnet',   name: 'Magnetism',         desc: 'Pull loose money ≤ your size toward you',   max: 8,  costs: [15,40,80,140,220,340,500,720] },
+  { id: 'armor',    name: 'Armor',             desc: 'Survive hits from larger players',           max: 5,  costs: [50,120,250,500,1000] },
+  { id: 'boost',    name: 'Mint Boost',        desc: 'E: speed burst, 10s cooldown',              max: 5,  costs: [30,80,180,400,900] },
+  { id: 'bait',     name: 'Counterfeit Bait',  desc: 'Q: drop decoy — eaters get downgraded',     max: 5,  costs: [40,100,220,500,1100] },
+  { id: 'ghost',    name: 'Ghost Summon',      desc: 'Send the $10K ghost after a target (one-use per summon)', max: 3, costs: [500,2000,8000] },
+  { id: 'expand',   name: 'Expand Board',      desc: 'Grow the world — more room, more money',    max: 3,  costs: [300,1200,5000] },
+  { id: 'moneybomb',name: 'Money Bomb',        desc: 'Explode cash everywhere — very expensive',  max: 1,  costs: [50000] },
 ];
 
 // ===================== STATE =====================
@@ -206,6 +211,8 @@ let heartbeatTimer = 0;
 let wantedBots = [];
 let dashActive = false;   // true while Space held and player can dash
 let dashDrainTimer = 0;   // timer to drain next cost unit
+let ghostSummonTarget = null; // bot targeted by ghost summon upgrade
+let boardExpansions = 0;      // number of times board has been expanded
 
 // ===================== AUDIO =====================
 function getAudioCtx() {
@@ -374,14 +381,15 @@ function pickLooseDenom() {
   return 11;
 }
 
-function createLooseMoney() {
-  const x = 80 + Math.random() * (WORLD_W - 160);
-  const y = 80 + Math.random() * (WORLD_H - 160);
+function createLooseMoneyInWorld(ww, wh) {
+  const x = 80 + Math.random() * (ww - 160);
+  const y = 80 + Math.random() * (wh - 160);
   const di = inSafeZone(x, y) ? 0 : pickLooseDenom();
   const safeX = inSafeZone(x, y) ? 100 : x;
   const safeY = inSafeZone(x, y) ? 100 : y;
   return { x: safeX, y: safeY, denomIdx: di, value: DENOMINATIONS[di].value, r: 6 + di * 1.8, age: 0 };
 }
+function createLooseMoney() { return createLooseMoneyInWorld(WORLD_W, WORLD_H); }
 
 function inSafeZone(x, y) {
   return x > SAFE_ZONE.x && y > SAFE_ZONE.y &&
@@ -455,6 +463,10 @@ function startGame() {
   heartbeatTimer = 0;
   dashActive = false;
   dashDrainTimer = 0;
+  ghostSummonTarget = null;
+  boardExpansions = 0;
+  WORLD_W = BASE_WORLD_W;
+  WORLD_H = BASE_WORLD_H;
 
   showHUD(true);
   gameRunning = true;
@@ -536,11 +548,12 @@ function update(dt) {
   if (!gameRunning) return;
   updateCloud(dt);
 
-  // Loose money magnet
+  // Loose money magnet (only pulls denominations ≤ player's current denomination)
   const magnetLv = getUpgradeLevel('magnet');
   if (magnetLv > 0) {
     const magnetRange = magnetLv * 70;
     looseMoney.forEach(lm => {
+      if (lm.denomIdx > player.denomIdx) return;
       const dx = player.x - lm.x, dy = player.y - lm.y;
       const dist = Math.sqrt(dx*dx + dy*dy);
       if (dist < magnetRange && dist > 1) {
@@ -707,7 +720,7 @@ function update(dt) {
     }
   });
 
-  // Bait logic
+  // Bait logic — any bot that eats it gets downgraded one denomination (player immune)
   for (let bi = baits.length - 1; bi >= 0; bi--) {
     const bait = baits[bi];
     bait.age += dt;
@@ -715,13 +728,18 @@ function update(dt) {
     let hit = false;
     bots.forEach(bot => {
       if (hit) return;
-      if (bot.denomIdx > player.denomIdx) {
-        const dx = bot.x - bait.x, dy = bot.y - bait.y;
-        if (dx*dx + dy*dy < (denomRadius(bot.denomIdx) + 14) ** 2) {
-          bot.stunTimer = 2.5;
-          spawnParticles(bait.x, bait.y, '#ffff00', 14);
-          hit = true;
+      const dx = bot.x - bait.x, dy = bot.y - bait.y;
+      if (dx*dx + dy*dy < (denomRadius(bot.denomIdx) + 14) ** 2) {
+        // Downgrade the bot one denomination level + stun briefly
+        if (bot.denomIdx > 0) {
+          bot.denomIdx--;
+          bot.value = DENOMINATIONS[bot.denomIdx].value;
+          bot.cloudCoins = [];
         }
+        bot.stunTimer = 3.0;
+        spawnParticles(bait.x, bait.y, '#ffff00', 18);
+        playTone(200, 0.3, 'sawtooth', 0.18);
+        hit = true;
       }
     });
     if (hit) baits.splice(bi, 1);
@@ -1028,8 +1046,18 @@ function updateBot(bot, dt) {
   }
 
   const r = denomRadius(bot.denomIdx);
+  // Wall bounce — if near edge, pick a new target toward center
+  const margin = r + 60;
+  if (bot.x < margin || bot.x > WORLD_W - margin || bot.y < margin || bot.y > WORLD_H - margin) {
+    bot.targetX = WORLD_W * 0.2 + Math.random() * WORLD_W * 0.6;
+    bot.targetY = WORLD_H * 0.2 + Math.random() * WORLD_H * 0.6;
+    bot.wanderTimer = 1.5 + Math.random();
+  }
   bot.x = Math.max(r, Math.min(WORLD_W - r, bot.x));
   bot.y = Math.max(r, Math.min(WORLD_H - r, bot.y));
+
+  // Passive value growth so bots evolve over time even without eating
+  bot.value += DENOMINATIONS[bot.denomIdx].value * 0.08 * dt;
 
   // Update cloud coin orbit angles
   if (bot.cloudCoins) {
@@ -1072,14 +1100,22 @@ function drawBotCloud(bot) {
 function updateGhost(dt) {
   ghost.wanderTimer -= dt;
   if (ghost.wanderTimer <= 0) {
-    // Target the highest-value entity on the board
-    let allTargets = [{ x: player.x, y: player.y, val: playerTotalValue() },
-      ...bots.map(b => ({ x: b.x, y: b.y, val: b.value }))];
-    allTargets.sort((a, b) => b.val - a.val);
-    const top = allTargets[0];
-    ghost.targetX = top.x + (Math.random() - 0.5) * 120;
-    ghost.targetY = top.y + (Math.random() - 0.5) * 120;
-    ghost.wanderTimer = 1.5 + Math.random() * 2;
+    if (ghostSummonTarget && bots.includes(ghostSummonTarget)) {
+      // Summoned — beeline for target bot
+      ghost.targetX = ghostSummonTarget.x + (Math.random()-0.5)*40;
+      ghost.targetY = ghostSummonTarget.y + (Math.random()-0.5)*40;
+      ghost.wanderTimer = 0.5;
+    } else {
+      ghostSummonTarget = null;
+      // Default: target the highest-value entity on the board
+      let allTargets = [{ x: player.x, y: player.y, val: playerTotalValue() },
+        ...bots.map(b => ({ x: b.x, y: b.y, val: b.value }))];
+      allTargets.sort((a, b) => b.val - a.val);
+      const top = allTargets[0];
+      ghost.targetX = top.x + (Math.random() - 0.5) * 120;
+      ghost.targetY = top.y + (Math.random() - 0.5) * 120;
+      ghost.wanderTimer = 1.5 + Math.random() * 2;
+    }
   }
   const gdx = ghost.targetX - ghost.x, gdy = ghost.targetY - ghost.y;
   const gdist = Math.sqrt(gdx*gdx + gdy*gdy);
@@ -1851,6 +1887,41 @@ function buyUpgrade(id) {
   if (!spendCloudCoins(cost)) return;
   matchUpgrades[id] = lv + 1;
   if (id === 'armor') player.armorHits = matchUpgrades.armor;
+
+  // Instant-effect upgrades
+  if (id === 'ghost') {
+    // Send ghost after the largest bot
+    const target = bots.reduce((best, b) => (!best || b.value > best.value) ? b : best, null);
+    if (target) {
+      ghostSummonTarget = target;
+      if (ghost) { ghost.targetX = target.x; ghost.targetY = target.y; ghost.wanderTimer = 0; }
+      spawnParticles(player.x, player.y, '#9900ff', 16);
+      playTone(110, 0.6, 'sawtooth', 0.22);
+    }
+    matchUpgrades[id] = lv; // ghost summon doesn't stack levels, it's per-use — reset after fire
+  } else if (id === 'expand') {
+    boardExpansions++;
+    WORLD_W = BASE_WORLD_W + boardExpansions * 800;
+    WORLD_H = BASE_WORLD_H + boardExpansions * 640;
+    // Spawn extra loose money in the newly expanded area
+    const extra = 80 + boardExpansions * 40;
+    for (let i = 0; i < extra; i++) looseMoney.push(createLooseMoney());
+    spawnParticles(player.x, player.y, '#00ccff', 20);
+    playEvo(player.denomIdx);
+  } else if (id === 'moneybomb') {
+    // Expensive explosion of cash — scatter high-value bills all over the world
+    const bombCount = 80;
+    for (let i = 0; i < bombCount; i++) {
+      const di = 4 + Math.floor(Math.random() * 6); // $1–$100 bills
+      const x = 100 + Math.random() * (WORLD_W - 200);
+      const y = 100 + Math.random() * (WORLD_H - 200);
+      looseMoney.push({ x, y, denomIdx: di, value: DENOMINATIONS[di].value, r: 6 + di * 1.8, age: 0 });
+    }
+    spawnParticles(player.x, player.y, '#ffd700', 40);
+    playTone(80, 1.2, 'sawtooth', 0.3);
+    setTimeout(() => playEvo(player.denomIdx), 100);
+  }
+
   playTone(660, 0.2, 'triangle', 0.2);
   showUpgrades(false);
 }
