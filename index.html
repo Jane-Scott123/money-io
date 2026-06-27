@@ -858,7 +858,7 @@ function playerSpeed() {
   const base = BASE_SPEEDS[player.denomIdx] || 100;
   const boost = (mintBoostActive > 0) ? 1.8 : 1;
   const lvBoost = 1 + getUpgradeLevel('speed') * 0.05;
-  const dashBoost = dashActive > 0 ? 1.5 : 1;
+  const dashBoost = dashActive ? 1.5 : 1;
   return base * boost * lvBoost * dashBoost;
 }
 
@@ -1598,8 +1598,8 @@ function drawEntity(e, isPlayer = false) {
   }
 
   // Dash indicator — orange burning ring
-  if (isPlayer && dashActive > 0) {
-    const dp = dashActive / 2.5;
+  if (isPlayer && dashActive) {
+    const dp = 1.0;
     ctx.beginPath();
     ctx.arc(0, 0, r + 15, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(255,140,0,${0.5 + Math.sin(Date.now()*0.02)*0.3})`;
