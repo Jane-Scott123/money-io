@@ -232,7 +232,8 @@ let bgMusicStarted = false;
 function startBgMusic() {
   if (bgMusicStarted) return;
   bgMusicStarted = true;
-  const ac = getAudioCtx();
+  let ac;
+  try { ac = getAudioCtx(); } catch(e) { return; }
   const jazzChords = [
     [261, 329, 392, 493], [293, 369, 440, 554], [246, 311, 370, 466],
     [220, 277, 330, 415], [261, 329, 392, 493]
@@ -361,8 +362,9 @@ function startGame() {
 
   showHUD(true);
   gameRunning = true;
-  startBgMusic();
+  lastTime = 0;
   requestAnimationFrame(gameLoop);
+  try { startBgMusic(); } catch(e) {}
 }
 
 function hideAllScreens() {
@@ -382,12 +384,12 @@ function showHUD(show) {
 let lastTime = 0;
 function gameLoop(ts) {
   if (!gameRunning) return;
-  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  const dt = lastTime === 0 ? 0.016 : Math.min((ts - lastTime) / 1000, 0.05);
   lastTime = ts;
 
-  update(dt);
-  render();
-  updateHUD();
+  try { update(dt); } catch(e) { console.error('update error:', e); }
+  try { render(); } catch(e) { console.error('render error:', e); }
+  try { updateHUD(); } catch(e) {}
 
   requestAnimationFrame(gameLoop);
 }
