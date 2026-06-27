@@ -1,0 +1,1217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Money.io</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; overflow: hidden; font-family: 'Arial Rounded MT Bold', Arial, sans-serif; }
+  canvas { display: block; }
+  #ui { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
+  /* HUD */
+  #hud-denom { position: fixed; bottom: 60px; left: 16px; background: rgba(0,0,0,0.6); border-radius: 12px; padding: 8px 14px; color: #fff; font-size: 14px; font-weight: bold; pointer-events: none; }
+  #hud-denom-icon { font-size: 28px; }
+  #hud-denom-name { font-size: 11px; color: #ffd700; margin-top: 2px; }
+  #hud-progress-wrap { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); width: min(400px, 80vw); pointer-events: none; }
+  #hud-progress-label { color: #fff; font-size: 11px; text-align: center; margin-bottom: 4px; text-shadow: 1px 1px 2px #000; }
+  #hud-progress-bar-bg { background: rgba(0,0,0,0.5); border-radius: 10px; height: 14px; border: 2px solid rgba(255,255,255,0.3); }
+  #hud-progress-bar { height: 100%; border-radius: 8px; background: linear-gradient(90deg, #ffd700, #ff8c00); transition: width 0.1s; }
+  #hud-leaderboard { position: fixed; top: 16px; right: 16px; background: rgba(0,0,0,0.65); border-radius: 12px; padding: 10px 14px; color: #fff; font-size: 12px; min-width: 140px; pointer-events: none; }
+  #hud-leaderboard h3 { font-size: 11px; color: #ffd700; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
+  #hud-leaderboard-list { list-style: none; }
+  #hud-leaderboard-list li { padding: 2px 0; display: flex; align-items: center; gap: 6px; }
+  #hud-minimap { position: fixed; bottom: 16px; right: 16px; border-radius: 8px; overflow: hidden; border: 2px solid rgba(255,255,255,0.3); pointer-events: none; }
+  #hud-value { position: fixed; top: 16px; left: 16px; background: rgba(0,0,0,0.6); border-radius: 12px; padding: 8px 14px; color: #ffd700; font-size: 13px; font-weight: bold; pointer-events: none; }
+
+  /* Screens */
+  .screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.85); color: #fff; z-index: 100; }
+  .screen h1 { font-size: clamp(32px, 8vw, 72px); color: #ffd700; text-shadow: 0 0 30px #ffa500, 0 4px 0 #cc7700; margin-bottom: 8px; }
+  .screen h2 { font-size: clamp(20px, 5vw, 40px); color: #ffd700; margin-bottom: 12px; }
+  .screen p { font-size: clamp(13px, 3vw, 18px); color: #ccc; margin-bottom: 8px; text-align: center; max-width: 400px; }
+  .screen .big-stat { font-size: clamp(24px, 6vw, 48px); color: #fff; margin: 8px 0; }
+  .btn { background: linear-gradient(135deg, #ffd700, #ff8c00); color: #000; font-size: clamp(14px, 3vw, 20px); font-weight: bold; padding: 14px 36px; border: none; border-radius: 50px; cursor: pointer; margin: 8px; pointer-events: all; transition: transform 0.1s, box-shadow 0.1s; box-shadow: 0 4px 0 #cc6600; }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 6px 0 #cc6600; }
+  .btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #cc6600; }
+  .btn-secondary { background: linear-gradient(135deg, #4a4a6a, #2a2a4a); color: #ffd700; box-shadow: 0 4px 0 #111; }
+  .btn-secondary:hover { box-shadow: 0 6px 0 #111; }
+
+  /* Upgrade Screen */
+  #upgrade-screen { overflow-y: auto; padding: 20px; }
+  #upgrade-screen h2 { margin-bottom: 4px; }
+  #gold-display { color: #ffd700; font-size: 18px; margin-bottom: 16px; }
+  .upgrade-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; max-width: 760px; width: 100%; margin-bottom: 16px; }
+  .upgrade-card { background: rgba(255,255,255,0.07); border: 2px solid rgba(255,215,0,0.2); border-radius: 14px; padding: 14px; text-align: center; }
+  .upgrade-card h4 { color: #ffd700; font-size: 14px; margin-bottom: 4px; }
+  .upgrade-card p { font-size: 11px; color: #aaa; margin-bottom: 8px; }
+  .upgrade-card .level-bar { display: flex; gap: 3px; justify-content: center; margin-bottom: 8px; }
+  .upgrade-card .level-pip { width: 14px; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.2); }
+  .upgrade-card .level-pip.filled { background: #ffd700; }
+  .upgrade-card .cost { font-size: 12px; color: #ffd700; margin-bottom: 6px; }
+  .upgrade-card .maxed { color: #4caf50; font-weight: bold; font-size: 13px; }
+
+  /* Evolution flash */
+  #evo-flash { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: none; z-index: 50; }
+  #evo-text { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 51; display: none; text-align: center; }
+  #evo-text .evo-label { font-size: clamp(28px, 8vw, 64px); font-weight: bold; color: #fff; text-shadow: 0 0 40px #ffd700, 0 0 80px #ffd700; animation: evo-pop 0.8s ease-out forwards; }
+  @keyframes evo-pop { 0% { transform: scale(0.2); opacity: 0; } 50% { transform: scale(1.3); opacity: 1; } 100% { transform: scale(1); opacity: 0; } }
+
+  /* Controls hint */
+  #controls-hint { position: fixed; bottom: 16px; left: 16px; background: rgba(0,0,0,0.5); border-radius: 8px; padding: 6px 10px; color: #aaa; font-size: 10px; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<!-- START SCREEN -->
+<div class="screen" id="start-screen">
+  <h1>💰 Money.io</h1>
+  <p>Start as a penny. Eat loose change. Evolve from a penny to a $10,000 bill!</p>
+  <p style="font-size:12px; color:#888; margin-top:4px;">WASD / Arrow Keys to move &nbsp;|&nbsp; Space = Mint Boost &nbsp;|&nbsp; Q = Counterfeit Bait</p>
+  <button class="btn" onclick="startGame()">▶ Play</button>
+  <button class="btn btn-secondary" onclick="showUpgrades(true)">⚡ Upgrades</button>
+  <div style="margin-top:16px; color:#ffd700; font-size:14px;" id="start-gold-display"></div>
+</div>
+
+<!-- GAME OVER SCREEN -->
+<div class="screen" id="gameover-screen" style="display:none">
+  <h2>💸 You Were Eaten!</h2>
+  <div class="big-stat" id="go-denom"></div>
+  <p id="go-value"></p>
+  <p id="go-rank"></p>
+  <p id="go-gold-earned" style="color:#ffd700;"></p>
+  <button class="btn" onclick="startGame()">▶ Respawn as Penny</button>
+  <button class="btn btn-secondary" onclick="showUpgrades(false)">⚡ Upgrades</button>
+</div>
+
+<!-- WIN SCREEN -->
+<div class="screen" id="win-screen" style="display:none">
+  <h1>🏆 YOU WIN!</h1>
+  <p>You reached the legendary <strong>$10,000 Bill!</strong></p>
+  <p style="color:#ffd700;" id="win-gold"></p>
+  <button class="btn" onclick="startGame()">▶ Play Again</button>
+</div>
+
+<!-- UPGRADE SCREEN -->
+<div class="screen" id="upgrade-screen" style="display:none">
+  <h2>⚡ Upgrades</h2>
+  <div id="gold-display">🪙 Gold Coins: <span id="gold-amount">0</span></div>
+  <div class="upgrade-grid" id="upgrade-grid"></div>
+  <button class="btn" id="upgrade-back-btn" onclick="hideUpgrades()">← Back</button>
+</div>
+
+<!-- HUD -->
+<div id="hud-denom" style="display:none">
+  <div id="hud-denom-icon">🪙</div>
+  <div id="hud-denom-name">Penny</div>
+</div>
+<div id="hud-progress-wrap" style="display:none">
+  <div id="hud-progress-label">Progress to next evolution</div>
+  <div id="hud-progress-bar-bg"><div id="hud-progress-bar" style="width:0%"></div></div>
+</div>
+<div id="hud-leaderboard" style="display:none">
+  <h3>🏆 Top Players</h3>
+  <ul id="hud-leaderboard-list"></ul>
+</div>
+<canvas id="hud-minimap" width="100" height="80"></canvas>
+<div id="hud-value" style="display:none">$<span id="hud-value-num">0.00</span></div>
+<div id="controls-hint" style="display:none">WASD/Arrows: Move &nbsp; Space: Boost &nbsp; Q: Bait</div>
+
+<!-- Evolution Flash -->
+<div id="evo-flash"></div>
+<div id="evo-text"></div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+// ===================== CONSTANTS =====================
+const DENOMINATIONS = [
+  { name: 'Penny',       symbol: '¢1',  emoji: '🪙', value: 1,      evolveAt: 5,      color: '#b87333', textColor: '#5c3a1e', radius: 14 },
+  { name: 'Nickel',      symbol: '¢5',  emoji: '🪙', value: 5,      evolveAt: 10,     color: '#a8a9ad', textColor: '#444',    radius: 17 },
+  { name: 'Dime',        symbol: '¢10', emoji: '🪙', value: 10,     evolveAt: 25,     color: '#d0d0d0', textColor: '#333',    radius: 13 },
+  { name: 'Quarter',     symbol: '¢25', emoji: '🪙', value: 25,     evolveAt: 100,    color: '#6b8cba', textColor: '#1a2a4a', radius: 20 },
+  { name: 'Dollar',      symbol: '$1',  emoji: '🪙', value: 100,    evolveAt: 500,    color: '#d4af37', textColor: '#5a3e00', radius: 24 },
+  { name: '$5 Bill',     symbol: '$5',  emoji: '💵', value: 500,    evolveAt: 1000,   color: '#2e7d32', textColor: '#c8e6c9', radius: 32, isBill: true },
+  { name: '$10 Bill',    symbol: '$10', emoji: '💵', value: 1000,   evolveAt: 5000,   color: '#558b2f', textColor: '#f1f8e9', radius: 38, isBill: true },
+  { name: '$20 Bill',    symbol: '$20', emoji: '💵', value: 2000,   evolveAt: 5000,   color: '#6d4c41', textColor: '#efebe9', radius: 44, isBill: true },
+  { name: '$50 Bill',    symbol: '$50', emoji: '💵', value: 5000,   evolveAt: 10000,  color: '#1565c0', textColor: '#e3f2fd', radius: 50, isBill: true },
+  { name: '$100 Bill',   symbol: '$100',emoji: '💵', value: 10000,  evolveAt: 50000,  color: '#00695c', textColor: '#e0f2f1', radius: 58, isBill: true },
+  { name: '$500 Bill',   symbol: '$500',emoji: '💵', value: 50000,  evolveAt: 100000, color: '#4527a0', textColor: '#ede7f6', radius: 66, isBill: true },
+  { name: '$1,000 Bill', symbol: '$1K', emoji: '💵', value: 100000, evolveAt: 500000, color: '#880e4f', textColor: '#fce4ec', radius: 74, isBill: true },
+  { name: '$5,000 Bill', symbol: '$5K', emoji: '💵', value: 500000, evolveAt: 1000000,color: '#bf360c', textColor: '#fff3e0', radius: 82, isBill: true },
+  { name: '$10,000 Bill',symbol: '$10K',emoji: '🏆', value: 1000000,evolveAt: Infinity,color: '#000000', textColor: '#ffd700', radius: 90, isBill: true },
+];
+
+const WORLD_W = 3000;
+const WORLD_H = 2400;
+const SAFE_ZONE = { x: WORLD_W - 220, y: WORLD_H - 200, w: 200, h: 180 };
+const LOOSE_MONEY_COUNT = 280;
+const BOT_COUNT = 18;
+const MINIMAP_SCALE = 100 / WORLD_W;
+
+// Speed table indexed by denom rank (0 = penny, fastest)
+const BASE_SPEEDS = [210, 200, 195, 185, 175, 160, 148, 138, 125, 112, 100, 90, 80, 70];
+
+// Loose money spawn weights by denom index (0-4 only for loose)
+const LOOSE_DENOMS = [0,0,0,0,1,1,1,2,2,3,4]; // weighted
+
+// ===================== UPGRADE DEFINITIONS =====================
+const UPGRADE_DEFS = [
+  { id: 'speed',    name: 'Move Speed',       desc: '+5% speed per level', max: 10, costBase: 5,  costMult: 1.6 },
+  { id: 'radius',   name: 'Eat Radius',       desc: '+8% eat radius per level', max: 10, costBase: 6,  costMult: 1.7 },
+  { id: 'magnet',   name: 'Magnetism',        desc: 'Pull loose money toward you', max: 8, costBase: 8,  costMult: 1.8 },
+  { id: 'armor',    name: 'Armor',            desc: 'Survive hits from larger players', max: 5, costBase: 15, costMult: 2.0 },
+  { id: 'boost',    name: 'Mint Boost',       desc: 'Space: speed burst (10s cooldown)', max: 5, costBase: 10, costMult: 1.9 },
+  { id: 'bait',     name: 'Counterfeit Bait', desc: 'Q: drop decoy that blinds eaters', max: 5, costBase: 12, costMult: 2.0 },
+];
+
+// ===================== STATE =====================
+let canvas, ctx, minimapCanvas, minimapCtx;
+let keys = {};
+let touchTarget = null;
+let gameRunning = false;
+let upgradeReturnToGame = false;
+
+let player, bots, looseMoney, particles, baits;
+let camera = { x: 0, y: 0 };
+let audioCtx = null;
+let mintBoostCooldown = 0;
+let mintBoostActive = 0;
+let baitCooldown = 0;
+let armorHits = 0;
+let stunTimer = 0;
+let goldCoins = 0;
+let matchGold = 0;
+
+// Upgrades stored in localStorage
+function loadUpgrades() {
+  try { return JSON.parse(localStorage.getItem('moneyio_upgrades') || '{}'); } catch { return {}; }
+}
+function saveUpgrades(u) { localStorage.setItem('moneyio_upgrades', JSON.stringify(u)); }
+function loadGold() { return parseInt(localStorage.getItem('moneyio_gold') || '0'); }
+function saveGold(g) { localStorage.setItem('moneyio_gold', String(g)); }
+function getUpgradeLevel(id) { return loadUpgrades()[id] || 0; }
+function upgradeCost(def, currentLevel) {
+  return Math.round(def.costBase * Math.pow(def.costMult, currentLevel));
+}
+
+// ===================== AUDIO =====================
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+function playTone(freq, duration, type = 'sine', vol = 0.18) {
+  try {
+    const ac = getAudioCtx();
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.connect(gain); gain.connect(ac.destination);
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(vol, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + duration);
+    osc.start(); osc.stop(ac.currentTime + duration);
+  } catch(e) {}
+}
+function playChing(denomIdx) {
+  const freqs = [2200,1800,1500,1200,900,700,550,450,360,280,220,180,140,110];
+  playTone(freqs[denomIdx] || 440, 0.15, 'triangle', 0.15);
+}
+function playEatPlayer(denomIdx) {
+  playTone(200 + denomIdx * 30, 0.3, 'sawtooth', 0.2);
+  setTimeout(() => playTone(300 + denomIdx * 20, 0.2, 'square', 0.12), 80);
+}
+function playEvo(denomIdx) {
+  const notes = [523,659,784,1047];
+  notes.forEach((f, i) => setTimeout(() => playTone(f, 0.25, 'triangle', 0.22), i * 80));
+}
+function playBounce() { playTone(150, 0.1, 'sine', 0.08); }
+
+// Background music (simple procedural)
+let bgMusicStarted = false;
+function startBgMusic() {
+  if (bgMusicStarted) return;
+  bgMusicStarted = true;
+  const ac = getAudioCtx();
+  const jazzChords = [
+    [261, 329, 392, 493], [293, 369, 440, 554], [246, 311, 370, 466],
+    [220, 277, 330, 415], [261, 329, 392, 493]
+  ];
+  let ci = 0;
+  function playChord() {
+    if (!gameRunning) { setTimeout(playChord, 2000); return; }
+    const chord = jazzChords[ci % jazzChords.length];
+    chord.forEach(f => {
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.connect(gain); gain.connect(ac.destination);
+      osc.type = 'triangle';
+      osc.frequency.value = f;
+      gain.gain.setValueAtTime(0.03, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 1.6);
+      osc.start(); osc.stop(ac.currentTime + 1.8);
+    });
+    ci++;
+    setTimeout(playChord, 1800);
+  }
+  playChord();
+}
+
+// ===================== ENTITIES =====================
+function makeDenomIdx(centValue) {
+  for (let i = DENOMINATIONS.length - 1; i >= 0; i--) {
+    if (centValue >= DENOMINATIONS[i].value) return i;
+  }
+  return 0;
+}
+
+function createPlayer() {
+  return {
+    x: WORLD_W / 2 + (Math.random() - 0.5) * 200,
+    y: WORLD_H / 2 + (Math.random() - 0.5) * 200,
+    denomIdx: 0,
+    value: DENOMINATIONS[0].value,
+    vx: 0, vy: 0,
+    armorHits: 0,
+    stunTimer: 0,
+    face: makeFace(),
+  };
+}
+
+function makeFace() {
+  return { eyeOff: Math.random() * 0.3 - 0.15, mouthStyle: Math.floor(Math.random() * 3) };
+}
+
+function createBot(denomIdx = null) {
+  const di = denomIdx !== null ? denomIdx : Math.floor(Math.random() * 5);
+  const d = DENOMINATIONS[di];
+  return {
+    x: Math.random() * (WORLD_W - 200) + 100,
+    y: Math.random() * (WORLD_H - 200) + 100,
+    denomIdx: di,
+    value: d.value * (1 + Math.random() * 0.8),
+    vx: 0, vy: 0,
+    targetX: Math.random() * WORLD_W,
+    targetY: Math.random() * WORLD_H,
+    wanderTimer: 0,
+    stunTimer: 0,
+    armorHits: 0,
+    face: makeFace(),
+    isBot: true,
+  };
+}
+
+function createLooseMoney(nearCenter = false) {
+  let x, y, di;
+  if (nearCenter) {
+    const t = Math.random();
+    if (t < 0.5) { di = 0; }
+    else if (t < 0.75) { di = 1; }
+    else if (t < 0.88) { di = 2; }
+    else if (t < 0.95) { di = 3; }
+    else { di = 4; }
+    // near edges for pennies/nickels, center for higher
+    if (di <= 1) {
+      const edge = Math.floor(Math.random() * 4);
+      if (edge === 0) { x = Math.random() * 400; y = Math.random() * WORLD_H; }
+      else if (edge === 1) { x = WORLD_W - 400 + Math.random() * 400; y = Math.random() * WORLD_H; }
+      else if (edge === 2) { x = Math.random() * WORLD_W; y = Math.random() * 400; }
+      else { x = Math.random() * WORLD_W; y = WORLD_H - 400 + Math.random() * 400; }
+    } else {
+      x = WORLD_W * 0.2 + Math.random() * WORLD_W * 0.6;
+      y = WORLD_H * 0.2 + Math.random() * WORLD_H * 0.6;
+    }
+  } else {
+    di = LOOSE_DENOMS[Math.floor(Math.random() * LOOSE_DENOMS.length)];
+    x = Math.random() * WORLD_W;
+    y = Math.random() * WORLD_H;
+  }
+  // Keep out of safe zone
+  if (inSafeZone(x, y)) { x = 100; y = 100; }
+  return { x, y, denomIdx: di, value: DENOMINATIONS[di].value, r: 6 + di * 2, age: 0 };
+}
+
+function inSafeZone(x, y) {
+  return x > SAFE_ZONE.x && y > SAFE_ZONE.y &&
+         x < SAFE_ZONE.x + SAFE_ZONE.w && y < SAFE_ZONE.y + SAFE_ZONE.h;
+}
+
+// ===================== GAME INIT =====================
+function startGame() {
+  hideAllScreens();
+  goldCoins = loadGold();
+  matchGold = 0;
+
+  player = createPlayer();
+  player.armorHits = getUpgradeLevel('armor');
+
+  bots = [];
+  for (let i = 0; i < BOT_COUNT; i++) bots.push(createBot());
+
+  looseMoney = [];
+  for (let i = 0; i < LOOSE_MONEY_COUNT; i++) looseMoney.push(createLooseMoney(true));
+
+  particles = [];
+  baits = [];
+
+  mintBoostCooldown = 0;
+  mintBoostActive = 0;
+  baitCooldown = 0;
+  stunTimer = 0;
+
+  showHUD(true);
+  gameRunning = true;
+  startBgMusic();
+  requestAnimationFrame(gameLoop);
+}
+
+function hideAllScreens() {
+  ['start-screen','gameover-screen','win-screen','upgrade-screen'].forEach(id => {
+    document.getElementById(id).style.display = 'none';
+  });
+}
+function showHUD(show) {
+  const d = show ? '' : 'none';
+  ['hud-denom','hud-progress-wrap','hud-leaderboard','hud-value','controls-hint'].forEach(id => {
+    document.getElementById(id).style.display = d;
+  });
+  document.getElementById('hud-minimap').style.display = show ? '' : 'none';
+}
+
+// ===================== GAME LOOP =====================
+let lastTime = 0;
+function gameLoop(ts) {
+  if (!gameRunning) return;
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+
+  update(dt);
+  render();
+  updateHUD();
+
+  requestAnimationFrame(gameLoop);
+}
+
+// ===================== UPDATE =====================
+function update(dt) {
+  // Timers
+  if (mintBoostActive > 0) mintBoostActive -= dt;
+  if (mintBoostCooldown > 0) mintBoostCooldown -= dt;
+  if (baitCooldown > 0) baitCooldown -= dt;
+  if (stunTimer > 0) { stunTimer -= dt; return; } // stunned, skip movement
+
+  // Player movement
+  updatePlayerMovement(dt);
+
+  // Bots
+  bots.forEach(b => updateBot(b, dt));
+
+  // Loose money magnet
+  const magnetLv = getUpgradeLevel('magnet');
+  const magnetRange = magnetLv * 60;
+  if (magnetLv > 0) {
+    looseMoney.forEach(lm => {
+      const dx = player.x - lm.x, dy = player.y - lm.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < magnetRange && dist > 1) {
+        const speed = 120 * magnetLv;
+        lm.x += (dx / dist) * speed * dt;
+        lm.y += (dy / dist) * speed * dt;
+      }
+    });
+  }
+
+  // Player eats loose money
+  const eatR = playerEatRadius();
+  looseMoney = looseMoney.filter(lm => {
+    const dx = player.x - lm.x, dy = player.y - lm.y;
+    if (dx*dx + dy*dy < eatR*eatR) {
+      player.value += lm.value;
+      spawnParticles(lm.x, lm.y, DENOMINATIONS[lm.denomIdx].color, 4);
+      playChing(lm.denomIdx);
+      looseMoney.push(createLooseMoney(true)); // respawn
+      return false;
+    }
+    return true;
+  });
+
+  // Evolution check
+  while (player.denomIdx < DENOMINATIONS.length - 1 &&
+         player.value >= DENOMINATIONS[player.denomIdx].evolveAt) {
+    player.denomIdx++;
+    DENOMINATIONS[player.denomIdx]; // no-op
+    triggerEvolution(player.denomIdx);
+  }
+
+  // Win check
+  if (player.denomIdx >= DENOMINATIONS.length - 1) {
+    gameOver(true);
+    return;
+  }
+
+  // Player eats bots / bots eat player
+  const pInSafe = inSafeZone(player.x, player.y);
+
+  bots.forEach((bot, bi) => {
+    if (bot.stunTimer > 0) { bot.stunTimer -= dt; return; }
+
+    // Bot eats loose money
+    const botEatR = denomRadius(bot.denomIdx) * 1.1;
+    for (let i = looseMoney.length - 1; i >= 0; i--) {
+      const lm = looseMoney[i];
+      const dx = bot.x - lm.x, dy = bot.y - lm.y;
+      if (dx*dx + dy*dy < botEatR*botEatR) {
+        bot.value += lm.value;
+        looseMoney.splice(i, 1);
+        looseMoney.push(createLooseMoney(true));
+      }
+    }
+
+    // Bot evolution
+    while (bot.denomIdx < DENOMINATIONS.length - 1 &&
+           bot.value >= DENOMINATIONS[bot.denomIdx].evolveAt) {
+      bot.denomIdx++;
+    }
+
+    // Can player eat bot?
+    if (!pInSafe && player.denomIdx > bot.denomIdx) {
+      const dx = player.x - bot.x, dy = player.y - bot.y;
+      const r = eatR + denomRadius(bot.denomIdx) * 0.5;
+      if (dx*dx + dy*dy < r*r) {
+        player.value += bot.value;
+        playEatPlayer(player.denomIdx);
+        spawnParticles(bot.x, bot.y, DENOMINATIONS[bot.denomIdx].color, 12);
+        // respawn bot
+        Object.assign(bot, createBot(0));
+        matchGold += 2;
+        return;
+      }
+    }
+
+    // Can bot eat player?
+    if (!pInSafe && bot.denomIdx > player.denomIdx) {
+      const dx = bot.x - player.x, dy = bot.y - player.y;
+      const r = denomRadius(bot.denomIdx) * 1.1 + playerRadius() * 0.5;
+      if (dx*dx + dy*dy < r*r) {
+        const armorLv = getUpgradeLevel('armor');
+        if (player.armorHits > 0) {
+          player.armorHits--;
+          stunTimer = 1.2;
+          spawnParticles(player.x, player.y, '#ff0000', 10);
+          playBounce();
+        } else {
+          gameOver(false);
+          return;
+        }
+      }
+    }
+  });
+
+  // Bait logic
+  baits.forEach((bait, bi) => {
+    bait.age += dt;
+    if (bait.age > 8) { baits.splice(bi, 1); return; }
+    bots.forEach(bot => {
+      if (bot.denomIdx > player.denomIdx) {
+        const dx = bot.x - bait.x, dy = bot.y - bait.y;
+        if (dx*dx + dy*dy < (denomRadius(bot.denomIdx) + 14) ** 2) {
+          bot.stunTimer = 2.5;
+          spawnParticles(bait.x, bait.y, '#ffff00', 14);
+          baits.splice(bi, 1);
+        }
+      }
+    });
+  });
+
+  // Particles
+  particles.forEach(p => {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    p.vy += 80 * dt;
+  });
+  particles = particles.filter(p => p.life > 0);
+
+  // Loose money age
+  looseMoney.forEach(lm => lm.age += dt);
+}
+
+function playerRadius() { return DENOMINATIONS[player.denomIdx].radius * (1 + getUpgradeLevel('radius') * 0.04); }
+function playerEatRadius() { return playerRadius() * (1 + getUpgradeLevel('radius') * 0.04); }
+function denomRadius(di) { return DENOMINATIONS[di].radius; }
+
+function playerSpeed() {
+  const base = BASE_SPEEDS[player.denomIdx] || 100;
+  const boost = (mintBoostActive > 0) ? 1.8 : 1;
+  const lvBoost = 1 + getUpgradeLevel('speed') * 0.05;
+  return base * boost * lvBoost;
+}
+
+function updatePlayerMovement(dt) {
+  let dx = 0, dy = 0;
+
+  if (touchTarget) {
+    const tdx = touchTarget.x - player.x;
+    const tdy = touchTarget.y - player.y;
+    const dist = Math.sqrt(tdx*tdx + tdy*tdy);
+    if (dist > 8) { dx = tdx / dist; dy = tdy / dist; }
+  } else {
+    if (keys['ArrowLeft'] || keys['KeyA']) dx -= 1;
+    if (keys['ArrowRight'] || keys['KeyD']) dx += 1;
+    if (keys['ArrowUp'] || keys['KeyW']) dy -= 1;
+    if (keys['ArrowDown'] || keys['KeyS']) dy += 1;
+    if (dx && dy) { dx *= 0.707; dy *= 0.707; }
+  }
+
+  const spd = playerSpeed();
+  player.x += dx * spd * dt;
+  player.y += dy * spd * dt;
+
+  // Wall bounce
+  const r = playerRadius();
+  if (player.x < r) { player.x = r; }
+  if (player.x > WORLD_W - r) { player.x = WORLD_W - r; }
+  if (player.y < r) { player.y = r; }
+  if (player.y > WORLD_H - r) { player.y = WORLD_H - r; }
+}
+
+function updateBot(bot, dt) {
+  if (bot.stunTimer > 0) return;
+
+  bot.wanderTimer -= dt;
+
+  // Find nearest threat and target
+  let nearestPrey = null, nearestPreyDist = 9999;
+  let nearestThreat = null, nearestThreatDist = 9999;
+
+  // Check player
+  const pdx = player.x - bot.x, pdy = player.y - bot.y;
+  const pdist = Math.sqrt(pdx*pdx + pdy*pdy);
+  if (player.denomIdx > bot.denomIdx && pdist < 350) {
+    if (pdist < nearestThreatDist) { nearestThreat = player; nearestThreatDist = pdist; }
+  } else if (bot.denomIdx > player.denomIdx && pdist < 300) {
+    if (pdist < nearestPreyDist) { nearestPrey = player; nearestPreyDist = pdist; }
+  }
+
+  // Check other bots
+  bots.forEach(other => {
+    if (other === bot) return;
+    const dx = other.x - bot.x, dy = other.y - bot.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (other.denomIdx > bot.denomIdx && dist < 300) {
+      if (dist < nearestThreatDist) { nearestThreat = other; nearestThreatDist = dist; }
+    } else if (bot.denomIdx > other.denomIdx && dist < 280) {
+      if (dist < nearestPreyDist) { nearestPrey = other; nearestPreyDist = dist; }
+    }
+  });
+
+  let tx = bot.targetX, ty = bot.targetY;
+
+  if (nearestThreat && nearestThreatDist < 300) {
+    // Flee
+    tx = bot.x - (nearestThreat.x - bot.x) * 3;
+    ty = bot.y - (nearestThreat.y - bot.y) * 3;
+  } else if (nearestPrey && nearestPreyDist < 280) {
+    // Chase
+    tx = nearestPrey.x;
+    ty = nearestPrey.y;
+  } else {
+    // Wander toward loose money or random target
+    if (bot.wanderTimer <= 0) {
+      // Find nearby loose money
+      let closest = null, closestDist = 9999;
+      looseMoney.forEach(lm => {
+        const dx = lm.x - bot.x, dy = lm.y - bot.y;
+        const d = Math.sqrt(dx*dx + dy*dy);
+        if (d < closestDist) { closestDist = d; closest = lm; }
+      });
+      if (closest && closestDist < 400) {
+        bot.targetX = closest.x; bot.targetY = closest.y;
+      } else {
+        bot.targetX = 100 + Math.random() * (WORLD_W - 200);
+        bot.targetY = 100 + Math.random() * (WORLD_H - 200);
+      }
+      bot.wanderTimer = 1.5 + Math.random() * 2;
+    }
+    tx = bot.targetX; ty = bot.targetY;
+  }
+
+  const bdx = tx - bot.x, bdy = ty - bot.y;
+  const bdist = Math.sqrt(bdx*bdx + bdy*bdy);
+  if (bdist > 4) {
+    const spd = (BASE_SPEEDS[bot.denomIdx] || 100) * 0.72;
+    bot.x += (bdx / bdist) * spd * dt;
+    bot.y += (bdy / bdist) * spd * dt;
+  }
+
+  // Wall clamp
+  const r = denomRadius(bot.denomIdx);
+  bot.x = Math.max(r, Math.min(WORLD_W - r, bot.x));
+  bot.y = Math.max(r, Math.min(WORLD_H - r, bot.y));
+}
+
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 60 + Math.random() * 120;
+    particles.push({
+      x, y, color,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 60,
+      life: 0.4 + Math.random() * 0.3,
+      r: 3 + Math.random() * 4,
+    });
+  }
+}
+
+function triggerEvolution(newDenomIdx) {
+  playEvo(newDenomIdx);
+  spawnParticles(player.x, player.y, DENOMINATIONS[newDenomIdx].color, 25);
+
+  const evoEl = document.getElementById('evo-text');
+  evoEl.innerHTML = `<div class="evo-label">🎉 ${DENOMINATIONS[newDenomIdx].name}!</div>`;
+  evoEl.style.display = 'block';
+  setTimeout(() => { evoEl.style.display = 'none'; }, 900);
+
+  // Reset armor on evo
+  player.armorHits = getUpgradeLevel('armor');
+  matchGold += 3 + newDenomIdx * 2;
+}
+
+// ===================== GAME OVER =====================
+function gameOver(win) {
+  gameRunning = false;
+  showHUD(false);
+
+  goldCoins = loadGold() + matchGold;
+  saveGold(goldCoins);
+
+  if (win) {
+    document.getElementById('win-gold').textContent = `+${matchGold} Gold Coins earned! Total: ${goldCoins}`;
+    document.getElementById('win-screen').style.display = 'flex';
+  } else {
+    const allEntities = [player, ...bots].sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
+    const rank = allEntities.findIndex(e => e === player) + 1;
+    document.getElementById('go-denom').textContent = DENOMINATIONS[player.denomIdx].emoji + ' ' + DENOMINATIONS[player.denomIdx].name;
+    document.getElementById('go-value').textContent = `Value: $${(player.value / 100).toFixed(2)}`;
+    document.getElementById('go-rank').textContent = `Leaderboard Position: #${rank} of ${allEntities.length}`;
+    document.getElementById('go-gold-earned').textContent = `+${matchGold} Gold Coins earned! Total: ${goldCoins}`;
+    document.getElementById('gameover-screen').style.display = 'flex';
+  }
+}
+
+// ===================== RENDER =====================
+function render() {
+  const vw = canvas.width, vh = canvas.height;
+
+  // Camera follows player
+  camera.x = player.x - vw / 2;
+  camera.y = player.y - vh / 2;
+  camera.x = Math.max(0, Math.min(WORLD_W - vw, camera.x));
+  camera.y = Math.max(0, Math.min(WORLD_H - vh, camera.y));
+
+  ctx.clearRect(0, 0, vw, vh);
+
+  // Background grid
+  ctx.save();
+  ctx.translate(-camera.x, -camera.y);
+
+  // Floor
+  ctx.fillStyle = '#2a3a2a';
+  ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < WORLD_W; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD_H); ctx.stroke(); }
+  for (let y = 0; y < WORLD_H; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD_W, y); ctx.stroke(); }
+
+  // Safe zone
+  drawSafeZone();
+
+  // Loose money
+  looseMoney.forEach(lm => drawLooseMoney(lm));
+
+  // Baits
+  baits.forEach(b => drawBait(b));
+
+  // Bots
+  bots.forEach(b => drawEntity(b));
+
+  // Player
+  drawEntity(player, true);
+
+  // Particles
+  particles.forEach(p => {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, p.life / 0.7);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // Border
+  ctx.strokeStyle = '#ffd700';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(3, 3, WORLD_W - 6, WORLD_H - 6);
+
+  ctx.restore();
+
+  // Minimap
+  drawMinimap();
+}
+
+function drawSafeZone() {
+  const sz = SAFE_ZONE;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,200,100,0.15)';
+  ctx.strokeStyle = 'rgba(0,200,100,0.6)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.roundRect(sz.x, sz.y, sz.w, sz.h, 12);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(0,200,100,0.8)';
+  ctx.font = 'bold 14px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('🏦 SAFE ZONE', sz.x + sz.w / 2, sz.y + sz.h / 2);
+  ctx.restore();
+}
+
+function drawLooseMoney(lm) {
+  const d = DENOMINATIONS[lm.denomIdx];
+  const pulse = 1 + Math.sin(lm.age * 4) * 0.08;
+  ctx.save();
+  ctx.translate(lm.x, lm.y);
+  ctx.scale(pulse, pulse);
+
+  if (d.isBill) {
+    // Small bill rectangle
+    const w = lm.r * 2.2, h = lm.r * 1.4;
+    ctx.fillStyle = d.color;
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(-w/2, -h/2, w, h, 3);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = d.textColor;
+    ctx.font = `bold ${lm.r * 0.7}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(d.symbol, 0, 0);
+  } else {
+    ctx.beginPath();
+    ctx.arc(0, 0, lm.r, 0, Math.PI * 2);
+    ctx.fillStyle = d.color;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = d.textColor;
+    ctx.font = `bold ${lm.r * 0.7}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(d.symbol, 0, 0);
+  }
+  ctx.restore();
+}
+
+function drawBait(b) {
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  ctx.globalAlpha = 0.7 + Math.sin(b.age * 8) * 0.3;
+  ctx.fillStyle = '#ff0';
+  ctx.strokeStyle = '#f80';
+  ctx.lineWidth = 2;
+  const w = 28, h = 18;
+  ctx.beginPath();
+  ctx.roundRect(-w/2, -h/2, w, h, 4);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#000';
+  ctx.font = 'bold 10px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('FAKE', 0, 0);
+  ctx.restore();
+}
+
+function drawEntity(e, isPlayer = false) {
+  const d = DENOMINATIONS[e.denomIdx];
+  const r = isPlayer ? playerRadius() : denomRadius(e.denomIdx);
+  const stunned = e.stunTimer > 0;
+
+  ctx.save();
+  ctx.translate(e.x, e.y);
+
+  if (stunned) {
+    ctx.globalAlpha = 0.5 + Math.sin(Date.now() * 0.02) * 0.3;
+  }
+
+  if (d.isBill) {
+    // Bill shape: wide rounded rectangle
+    const w = r * 2.2, h = r * 1.4;
+    // Shadow
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = d.color;
+    ctx.strokeStyle = isPlayer ? '#fff' : 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = isPlayer ? 3 : 1.5;
+    ctx.beginPath();
+    ctx.roundRect(-w/2, -h/2, w, h, 8);
+    ctx.fill(); ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Inner border detail
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(-w/2 + 4, -h/2 + 4, w - 8, h - 8, 5);
+    ctx.stroke();
+
+    // Symbol text
+    ctx.fillStyle = d.textColor;
+    ctx.font = `bold ${r * 0.55}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(d.symbol, 0, -2);
+
+    // Eyes
+    drawEyes(e.face, r * 0.22, r * 0.5);
+
+  } else {
+    // Coin shape
+    ctx.shadowColor = 'rgba(0,0,0,0.4)';
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fillStyle = d.color;
+    ctx.fill();
+    ctx.strokeStyle = isPlayer ? '#fff' : 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = isPlayer ? 3 : 2;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Inner circle detail
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.75, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Symbol
+    ctx.fillStyle = d.textColor;
+    ctx.font = `bold ${r * 0.55}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(d.symbol, 0, -2);
+
+    // Eyes
+    drawEyes(e.face, r * 0.28, r * 0.55);
+  }
+
+  // Player indicator ring
+  if (isPlayer) {
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 5, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,255,100,${0.4 + Math.sin(Date.now() * 0.005) * 0.2})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Boost indicator
+  if (isPlayer && mintBoostActive > 0) {
+    ctx.beginPath();
+    ctx.arc(0, 0, r + 10, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,200,255,0.6)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+
+  // Name label
+  if (isPlayer || r > 20) {
+    ctx.fillStyle = '#fff';
+    ctx.font = `${Math.max(9, r * 0.28)}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(isPlayer ? 'YOU' : '🤖', 0, r + 3);
+  }
+
+  ctx.restore();
+}
+
+function drawEyes(face, eyeY, eyeX) {
+  const eyeR = 3;
+  // Left eye
+  ctx.beginPath();
+  ctx.arc(-eyeX * 0.4 + face.eyeOff * 5, eyeY * 0.3, eyeR, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-eyeX * 0.4 + face.eyeOff * 5 + 1, eyeY * 0.3 + 1, eyeR * 0.55, 0, Math.PI * 2);
+  ctx.fillStyle = '#333';
+  ctx.fill();
+  // Right eye
+  ctx.beginPath();
+  ctx.arc(eyeX * 0.4 + face.eyeOff * 5, eyeY * 0.3, eyeR, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(eyeX * 0.4 + face.eyeOff * 5 + 1, eyeY * 0.3 + 1, eyeR * 0.55, 0, Math.PI * 2);
+  ctx.fillStyle = '#333';
+  ctx.fill();
+}
+
+function drawMinimap() {
+  minimapCtx.clearRect(0, 0, 100, 80);
+  minimapCtx.fillStyle = 'rgba(20,30,20,0.9)';
+  minimapCtx.fillRect(0, 0, 100, 80);
+
+  const sx = 100 / WORLD_W, sy = 80 / WORLD_H;
+
+  // Safe zone
+  minimapCtx.fillStyle = 'rgba(0,200,100,0.4)';
+  minimapCtx.fillRect(SAFE_ZONE.x * sx, SAFE_ZONE.y * sy, SAFE_ZONE.w * sx, SAFE_ZONE.h * sy);
+
+  // Loose money (tiny dots)
+  looseMoney.forEach(lm => {
+    minimapCtx.fillStyle = DENOMINATIONS[lm.denomIdx].color;
+    minimapCtx.fillRect(lm.x * sx - 1, lm.y * sy - 1, 2, 2);
+  });
+
+  // Bots
+  bots.forEach(b => {
+    minimapCtx.fillStyle = DENOMINATIONS[b.denomIdx].color;
+    minimapCtx.beginPath();
+    minimapCtx.arc(b.x * sx, b.y * sy, 2, 0, Math.PI * 2);
+    minimapCtx.fill();
+  });
+
+  // Player
+  minimapCtx.fillStyle = '#fff';
+  minimapCtx.strokeStyle = '#ffd700';
+  minimapCtx.lineWidth = 1;
+  minimapCtx.beginPath();
+  minimapCtx.arc(player.x * sx, player.y * sy, 3, 0, Math.PI * 2);
+  minimapCtx.fill();
+  minimapCtx.stroke();
+
+  // Viewport rect
+  const vw = canvas.width, vh = canvas.height;
+  minimapCtx.strokeStyle = 'rgba(255,255,255,0.4)';
+  minimapCtx.lineWidth = 1;
+  minimapCtx.strokeRect(camera.x * sx, camera.y * sy, vw * sx, vh * sy);
+}
+
+// ===================== HUD =====================
+function updateHUD() {
+  if (!gameRunning) return;
+  const d = DENOMINATIONS[player.denomIdx];
+  document.getElementById('hud-denom-icon').textContent = d.emoji;
+  document.getElementById('hud-denom-name').textContent = d.name;
+
+  // Progress bar
+  const prevVal = d.value;
+  const nextVal = d.evolveAt;
+  const prog = nextVal === Infinity ? 1 : Math.min(1, (player.value - prevVal) / (nextVal - prevVal));
+  document.getElementById('hud-progress-bar').style.width = (prog * 100) + '%';
+  if (nextVal === Infinity) {
+    document.getElementById('hud-progress-label').textContent = '👑 MAX DENOMINATION — YOU WIN!';
+  } else {
+    const next = DENOMINATIONS[player.denomIdx + 1];
+    document.getElementById('hud-progress-label').textContent = `Next: ${next.name} (${Math.round(prog * 100)}%)`;
+  }
+
+  // Value
+  document.getElementById('hud-value-num').textContent = (player.value / 100).toFixed(2);
+
+  // Leaderboard
+  const all = [{ name: 'YOU', denomIdx: player.denomIdx, value: player.value }, ...bots.map((b, i) => ({ name: `Bot ${i+1}`, denomIdx: b.denomIdx, value: b.value }))];
+  all.sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
+  const top5 = all.slice(0, 5);
+  const lb = document.getElementById('hud-leaderboard-list');
+  lb.innerHTML = top5.map((e, i) => {
+    const d2 = DENOMINATIONS[e.denomIdx];
+    const isYou = e.name === 'YOU';
+    return `<li style="${isYou ? 'color:#ffd700;font-weight:bold;' : ''}">${i+1}. ${d2.emoji} ${d2.name}${isYou ? ' (You)' : ''}</li>`;
+  }).join('');
+}
+
+// ===================== UPGRADES SCREEN =====================
+function showUpgrades(fromStart) {
+  upgradeReturnToGame = !fromStart && gameRunning;
+  if (upgradeReturnToGame) gameRunning = false;
+  hideAllScreens();
+  showHUD(false);
+
+  const gold = loadGold();
+  document.getElementById('gold-amount').textContent = gold;
+
+  const upgrades = loadUpgrades();
+  const grid = document.getElementById('upgrade-grid');
+  grid.innerHTML = '';
+
+  UPGRADE_DEFS.forEach(def => {
+    const lv = upgrades[def.id] || 0;
+    const maxed = lv >= def.max;
+    const cost = maxed ? 0 : upgradeCost(def, lv);
+    const canAfford = !maxed && gold >= cost;
+
+    const card = document.createElement('div');
+    card.className = 'upgrade-card';
+
+    const pips = Array.from({length: def.max}, (_, i) =>
+      `<div class="level-pip ${i < lv ? 'filled' : ''}"></div>`
+    ).join('');
+
+    card.innerHTML = `
+      <h4>${def.name}</h4>
+      <p>${def.desc}</p>
+      <div class="level-bar">${pips}</div>
+      ${maxed
+        ? `<div class="maxed">✅ MAX</div>`
+        : `<div class="cost">🪙 Cost: ${cost} Gold</div>
+           <button class="btn" style="font-size:12px;padding:8px 16px;${!canAfford ? 'opacity:0.5;' : ''}"
+             onclick="buyUpgrade('${def.id}')" ${!canAfford ? 'disabled' : ''}>
+             Upgrade (Lv ${lv} → ${lv+1})
+           </button>`
+      }
+    `;
+    grid.appendChild(card);
+  });
+
+  document.getElementById('upgrade-screen').style.display = 'flex';
+}
+
+function buyUpgrade(id) {
+  const def = UPGRADE_DEFS.find(d => d.id === id);
+  const upgrades = loadUpgrades();
+  const lv = upgrades[id] || 0;
+  if (lv >= def.max) return;
+  const cost = upgradeCost(def, lv);
+  let gold = loadGold();
+  if (gold < cost) return;
+  gold -= cost;
+  saveGold(gold);
+  upgrades[id] = lv + 1;
+  saveUpgrades(upgrades);
+  playTone(660, 0.2, 'triangle', 0.2);
+  showUpgrades(!upgradeReturnToGame && !gameRunning);
+}
+
+function hideUpgrades() {
+  document.getElementById('upgrade-screen').style.display = 'none';
+  if (upgradeReturnToGame) {
+    gameRunning = true;
+    showHUD(true);
+    requestAnimationFrame(gameLoop);
+  } else {
+    document.getElementById('start-screen').style.display = 'flex';
+    updateStartGold();
+  }
+}
+
+function updateStartGold() {
+  document.getElementById('start-gold-display').textContent = `🪙 Gold Coins: ${loadGold()}`;
+}
+
+// ===================== INPUT =====================
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+
+  // Mint Boost
+  if (e.code === 'Space' && gameRunning && mintBoostCooldown <= 0) {
+    const boostLv = getUpgradeLevel('boost');
+    if (boostLv > 0) {
+      mintBoostActive = 1.5 + boostLv * 0.3;
+      mintBoostCooldown = 10;
+      playTone(880, 0.15, 'square', 0.15);
+    }
+    e.preventDefault();
+  }
+
+  // Counterfeit Bait
+  if (e.code === 'KeyQ' && gameRunning && baitCooldown <= 0) {
+    const baitLv = getUpgradeLevel('bait');
+    if (baitLv > 0) {
+      baits.push({ x: player.x, y: player.y, age: 0 });
+      baitCooldown = 15 - baitLv * 2;
+      playTone(440, 0.1, 'sawtooth', 0.12);
+    }
+  }
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// Touch controls
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  touchTarget = screenToWorld(t.clientX, t.clientY);
+
+  // Double-tap for boost
+  const now = Date.now();
+  if (now - (canvas._lastTap || 0) < 300 && gameRunning && mintBoostCooldown <= 0) {
+    const boostLv = getUpgradeLevel('boost');
+    if (boostLv > 0) {
+      mintBoostActive = 1.5 + boostLv * 0.3;
+      mintBoostCooldown = 10;
+      playTone(880, 0.15, 'square', 0.15);
+    }
+  }
+  canvas._lastTap = now;
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  touchTarget = screenToWorld(t.clientX, t.clientY);
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (e.touches.length === 0) touchTarget = null;
+}, { passive: false });
+
+function screenToWorld(cx, cy) {
+  return { x: cx + camera.x, y: cy + camera.y };
+}
+
+// ===================== RESIZE =====================
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ===================== INIT =====================
+canvas = document.getElementById('gameCanvas');
+ctx = canvas.getContext('2d');
+minimapCanvas = document.getElementById('hud-minimap');
+minimapCtx = minimapCanvas.getContext('2d');
+
+// polyfill roundRect for older browsers
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    this.beginPath();
+    this.moveTo(x + r, y);
+    this.lineTo(x + w - r, y);
+    this.quadraticCurveTo(x + w, y, x + w, y + r);
+    this.lineTo(x + w, y + h - r);
+    this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    this.lineTo(x + r, y + h);
+    this.quadraticCurveTo(x, y + h, x, y + h - r);
+    this.lineTo(x, y + r);
+    this.quadraticCurveTo(x, y, x + r, y);
+    this.closePath();
+  };
+}
+
+resize();
+updateStartGold();
+showHUD(false);
+</script>
+</body>
+</html>
