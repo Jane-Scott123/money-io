@@ -88,9 +88,18 @@
 
 <!-- WIN SCREEN -->
 <div class="screen" id="win-screen" style="display:none">
-  <h1>🏆 YOU WIN!</h1>
-  <p>You reached the legendary <strong>$10,000 Bill!</strong></p>
+  <h1>💎 YOU WIN!</h1>
+  <p id="win-msg">You reached the legendary <strong>Diamond!</strong></p>
   <button class="btn" onclick="startGame()">▶ Play Again</button>
+</div>
+
+<!-- PORTAL SCREEN -->
+<div class="screen" id="portal-screen" style="display:none; background:rgba(0,0,30,0.97);">
+  <h1 style="color:#aa44ff;text-shadow:0 0 40px #7700ff,0 4px 0 #330088;">🌀 PORTAL FOUND!</h1>
+  <p style="font-size:20px;color:#ddd;">You've reached the <strong style="color:#ffd700;">$5,000 Bill</strong>!</p>
+  <p>A dimensional rift has opened. Step through to enter the <strong style="color:#aa44ff;">Gem World</strong> — a new ladder awaits.</p>
+  <button class="btn" style="background:linear-gradient(135deg,#aa44ff,#5500cc);" onclick="enterGemWorld()">🌀 Enter Gem World</button>
+  <button class="btn btn-secondary" onclick="stayInMoneyWorld()">Stay Here</button>
 </div>
 
 <!-- IN-GAME UPGRADE SCREEN (overlay, game pauses) -->
@@ -116,7 +125,7 @@
 </div>
 <canvas id="hud-minimap" width="100" height="80"></canvas>
 <div id="hud-value" style="display:none">$<span id="hud-value-num">0.00</span></div>
-<div id="controls-hint" style="display:none">WASD/Arrows: Move &nbsp; U: Upgrades &nbsp; Hold Space: Dash &nbsp; E: Boost &nbsp; Q: Bait</div>
+<div id="controls-hint" style="display:none">WASD/Arrows: Move &nbsp; U: Upgrades &nbsp; Hold Space: Dash &nbsp; E: Boost &nbsp; Q: Bait &nbsp; R: Minion</div>
 <!-- In-game upgrade button -->
 <button id="upgrade-btn" style="display:none;position:fixed;top:60px;right:16px;z-index:10;pointer-events:all;" class="btn btn-secondary" onclick="showUpgrades(false)" title="Upgrades (U)">⚡ Upgrade</button>
 <div id="hud-cloud" style="display:none;position:fixed;top:60px;left:16px;background:rgba(0,0,0,0.6);border-radius:12px;padding:6px 12px;color:#fff;font-size:12px;pointer-events:none;">☁️ Cloud: <span id="hud-cloud-val">$0.00</span></div>
@@ -138,6 +147,7 @@ function showErr(msg) {
 
 // ===================== CONSTANTS =====================
 // evolveAt = value of the next denomination (clean 1-step-at-a-time ladder)
+// Money world denominations (used in normal game)
 const DENOMINATIONS = [
   { name: 'Penny',       symbol: '¢1',  emoji: '🪙', value: 1,       evolveAt: 5,       color: '#b87333', textColor: '#5c3a1e', radius: 14 },
   { name: 'Nickel',      symbol: '¢5',  emoji: '🪙', value: 5,       evolveAt: 10,      color: '#a8a9ad', textColor: '#333',    radius: 17 },
@@ -151,8 +161,18 @@ const DENOMINATIONS = [
   { name: '$100 Bill',   symbol: '$100',emoji: '💵', value: 10000,   evolveAt: 50000,   color: '#00695c', textColor: '#e0f2f1', radius: 58, isBill: true },
   { name: '$500 Bill',   symbol: '$500',emoji: '💵', value: 50000,   evolveAt: 100000,  color: '#4527a0', textColor: '#ede7f6', radius: 66, isBill: true },
   { name: '$1,000 Bill', symbol: '$1K', emoji: '💵', value: 100000,  evolveAt: 500000,  color: '#880e4f', textColor: '#fce4ec', radius: 74, isBill: true },
-  { name: '$5,000 Bill', symbol: '$5K', emoji: '💵', value: 500000,  evolveAt: 1000000, color: '#bf360c', textColor: '#fff3e0', radius: 82, isBill: true },
-  { name: '$10,000 Bill',symbol: '$10K',emoji: '🏆', value: 1000000, evolveAt: Infinity, color: '#000000', textColor: '#ffd700', radius: 90, isBill: true },
+  { name: '$5,000 Bill', symbol: '$5K', emoji: '🏆', value: 500000,  evolveAt: Infinity, color: '#000000', textColor: '#ffd700', radius: 90, isBill: true },
+];
+
+// Gem world denominations (portal world)
+const GEM_DENOMINATIONS = [
+  { name: 'Bronze',   symbol: 'Br', emoji: '🟤', value: 1,       evolveAt: 8,        color: '#cd7f32', textColor: '#3d1f00', radius: 16, isGem: true },
+  { name: 'Silver',   symbol: 'Ag', emoji: '⚪', value: 8,       evolveAt: 50,       color: '#c0c0c0', textColor: '#333',    radius: 20, isGem: true },
+  { name: 'Gold',     symbol: 'Au', emoji: '🟡', value: 50,      evolveAt: 250,      color: '#ffd700', textColor: '#5a3e00', radius: 25, isGem: true },
+  { name: 'Sapphire', symbol: 'Sa', emoji: '🔵', value: 250,     evolveAt: 1500,     color: '#0f52ba', textColor: '#e8f4fd', radius: 31, isGem: true },
+  { name: 'Ruby',     symbol: 'Rb', emoji: '🔴', value: 1500,    evolveAt: 8000,     color: '#9b111e', textColor: '#ffe4e6', radius: 38, isGem: true },
+  { name: 'Emerald',  symbol: 'Em', emoji: '🟢', value: 8000,    evolveAt: 40000,    color: '#008000', textColor: '#e8ffe8', radius: 46, isGem: true },
+  { name: 'Diamond',  symbol: 'Di', emoji: '💎', value: 40000,   evolveAt: Infinity, color: '#b9f2ff', textColor: '#003344', radius: 55, isGem: true },
 ];
 
 let WORLD_W = 3000;
@@ -183,6 +203,7 @@ const UPGRADE_DEFS = [
   { id: 'ghost',    name: 'Ghost Summon',      desc: 'Send the $10K ghost after a target (one-use per summon)', max: 3, costs: [500,2000,8000] },
   { id: 'expand',   name: 'Expand Board',      desc: 'Grow the world — more room, more money',    max: 3,  costs: [300,1200,5000] },
   { id: 'moneybomb',name: 'Money Bomb',        desc: 'Explode cash everywhere — very expensive',  max: 1,  costs: [50000] },
+  { id: 'minions',  name: 'Money Minions',    desc: 'R: launch a minion that collects money and returns', max: 5, costs: [800,2000,5000,12000,30000] },
 ];
 
 // ===================== STATE =====================
@@ -213,6 +234,10 @@ let dashActive = false;   // true while Space held and player can dash
 let dashDrainTimer = 0;   // timer to drain next cost unit
 let ghostSummonTarget = null; // bot targeted by ghost summon upgrade
 let boardExpansions = 0;      // number of times board has been expanded
+let inGemWorld = false;       // true when player is in portal/gem world
+let activeDenomsRef = null;   // points to DENOMINATIONS or GEM_DENOMINATIONS
+let portal = null;            // { x, y, r, active } — the dimensional rift
+let minions = [];             // money minions sent out by upgrade
 
 // ===================== AUDIO =====================
 function getAudioCtx() {
@@ -286,6 +311,9 @@ function startBgMusic() {
 }
 
 // ===================== ENTITIES =====================
+// Active denominations for the player (money world or gem world)
+function AD() { return inGemWorld ? GEM_DENOMINATIONS : DENOMINATIONS; }
+
 function makeDenomIdx(centValue) {
   for (let i = DENOMINATIONS.length - 1; i >= 0; i--) {
     if (centValue >= DENOMINATIONS[i].value) return i;
@@ -308,7 +336,7 @@ function createPlayer() {
 
 // Total value = denomination base + sum of cloud coins
 function playerTotalValue() {
-  return DENOMINATIONS[player.denomIdx].value + cloudValue(player.cloud);
+  return AD()[player.denomIdx].value + cloudValue(player.cloud);
 }
 function cloudValue(cloud) {
   return cloud.reduce((s, c) => s + c.value, 0);
@@ -467,6 +495,10 @@ function startGame() {
   boardExpansions = 0;
   WORLD_W = BASE_WORLD_W;
   WORLD_H = BASE_WORLD_H;
+  inGemWorld = false;
+  activeDenomsRef = DENOMINATIONS;
+  portal = null;
+  minions = [];
 
   showHUD(true);
   gameRunning = true;
@@ -476,7 +508,7 @@ function startGame() {
 }
 
 function hideAllScreens() {
-  ['start-screen','gameover-screen','win-screen','upgrade-screen'].forEach(id => {
+  ['start-screen','gameover-screen','win-screen','upgrade-screen','portal-screen'].forEach(id => {
     document.getElementById(id).style.display = 'none';
   });
 }
@@ -526,8 +558,8 @@ function update(dt) {
         spawnParticles(player.x, player.y, '#ff8800', 3);
       } else if (player.denomIdx > 0) {
         // Cloud empty — downgrade denomination, ~80% difference returns as random change
-        const fromValue = DENOMINATIONS[player.denomIdx].value;
-        const toValue = DENOMINATIONS[player.denomIdx - 1].value;
+        const fromValue = AD()[player.denomIdx].value;
+        const toValue = AD()[player.denomIdx - 1].value;
         player.denomIdx--;
         const returnAmt = Math.floor((fromValue - toValue) * (0.75 + Math.random() * 0.1));
         makeRandomChange(returnAmt).forEach(coin =>
@@ -547,6 +579,7 @@ function update(dt) {
   if (ghost) updateGhost(dt);
   if (!gameRunning) return;
   updateCloud(dt);
+  updateMinions(dt);
 
   // Loose money magnet (only pulls denominations ≤ player's current denomination)
   const magnetLv = getUpgradeLevel('magnet');
@@ -588,19 +621,34 @@ function update(dt) {
 
   // Evolution check: total value (denom base + cloud) must reach evolveAt
   const total = playerTotalValue();
-  while (player.denomIdx < DENOMINATIONS.length - 1 &&
-         total >= DENOMINATIONS[player.denomIdx].evolveAt) {
-    // Consume the cloud coins needed above the current denom base
-    const needed = DENOMINATIONS[player.denomIdx].evolveAt - DENOMINATIONS[player.denomIdx].value;
+  const activeDenoms = AD();
+  while (player.denomIdx < activeDenoms.length - 1 &&
+         total >= activeDenoms[player.denomIdx].evolveAt) {
+    const needed = activeDenoms[player.denomIdx].evolveAt - activeDenoms[player.denomIdx].value;
     if (needed > 0) spendCloudCoins(needed);
     player.denomIdx++;
     triggerEvolution(player.denomIdx);
     break; // re-check next frame
   }
 
-  if (player.denomIdx >= DENOMINATIONS.length - 1) {
-    gameOver(true);
+  // Max denom reached
+  if (player.denomIdx >= activeDenoms.length - 1 && total >= activeDenoms[activeDenoms.length - 1].evolveAt) {
+    if (!inGemWorld) {
+      // Offer portal to gem world
+      spawnPortal();
+    } else {
+      gameOver(true); // Won gem world!
+    }
     return;
+  }
+
+  // Portal: player walks into it
+  if (portal && portal.active) {
+    const pdx = player.x - portal.x, pdy = player.y - portal.y;
+    if (pdx*pdx + pdy*pdy < portal.r * portal.r) {
+      openPortalScreen();
+      return;
+    }
   }
 
   const pInSafe = inSafeZone(player.x, player.y);
@@ -797,7 +845,7 @@ function update(dt) {
             if (refund > 0) addToCloud(player.x, player.y, Math.max(0, makeDenomIdx(refund)), refund);
             spawnParticles(player.x, player.y, '#ffcc00', 8);
           } else if (player.denomIdx > 0) {
-            const lostValue = DENOMINATIONS[player.denomIdx].value;
+            const lostValue = AD()[player.denomIdx].value;
             player.denomIdx--;
             addToCloud(player.x, player.y, Math.max(0, player.denomIdx), Math.floor(lostValue * 0.7));
             spawnParticles(player.x, player.y, '#ffcc00', 12);
@@ -873,7 +921,7 @@ function updateCloud(dt) {
   });
 }
 
-function playerRadius() { return DENOMINATIONS[player.denomIdx].radius * (1 + getUpgradeLevel('radius') * 0.06); }
+function playerRadius() { return AD()[player.denomIdx].radius * (1 + getUpgradeLevel('radius') * 0.06); }
 function playerEatRadius() { return playerRadius() * 1.15; }
 function denomRadius(di) { return DENOMINATIONS[di].radius; }
 
@@ -967,7 +1015,7 @@ function updateBot(bot, dt) {
   }
 
   // Check if player is near evolution (>80%) — amps up bot aggression range
-  const denom = DENOMINATIONS[player.denomIdx];
+  const denom = AD()[player.denomIdx];
   const ptotal = playerTotalValue();
   const prog = denom.evolveAt === Infinity ? 1 : Math.min(1, (ptotal - denom.value) / (denom.evolveAt - denom.value));
   const playerNearEvo = prog > 0.8;
@@ -1280,7 +1328,7 @@ function triggerEvolution(newDenomIdx) {
   spawnParticles(player.x, player.y, DENOMINATIONS[newDenomIdx].color, 30);
 
   const evoEl = document.getElementById('evo-text');
-  evoEl.innerHTML = `<div class="evo-label">🎉 ${DENOMINATIONS[newDenomIdx].name}!</div>`;
+  evoEl.innerHTML = `<div class="evo-label">🎉 ${AD()[newDenomIdx].name}!</div>`;
   evoEl.style.display = 'block';
   setTimeout(() => { evoEl.style.display = 'none'; }, 900);
 
@@ -1293,6 +1341,10 @@ function gameOver(win) {
   showHUD(false);
 
   if (win) {
+    const winMsg = document.getElementById('win-msg');
+    if (winMsg) winMsg.innerHTML = inGemWorld
+      ? 'You reached the legendary <strong>💎 Diamond!</strong> You conquered both worlds!'
+      : 'You reached the legendary <strong>🏆 $5,000 Bill!</strong>';
     document.getElementById('win-screen').style.display = 'flex';
   } else {
     // Drop half cloud coins on the floor at death location (others can scavenge)
@@ -1314,11 +1366,141 @@ function gameOver(win) {
       ...bots.map(b => ({ denomIdx: b.denomIdx, value: b.value }))];
     allEntities.sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
     const rank = allEntities.findIndex(e => e.isPlayer) + 1;
-    document.getElementById('go-denom').textContent = DENOMINATIONS[player.denomIdx].emoji + ' ' + DENOMINATIONS[player.denomIdx].name;
+    document.getElementById('go-denom').textContent = AD()[player.denomIdx].emoji + ' ' + AD()[player.denomIdx].name;
     document.getElementById('go-value').textContent = `Value: $${(total / 100).toFixed(2)} (cloud: $${(cloudValue(player.cloud)/100).toFixed(2)})`;
     document.getElementById('go-rank').textContent = `Leaderboard Position: #${rank} of ${allEntities.length}`;
     document.getElementById('gameover-screen').style.display = 'flex';
   }
+}
+
+// ===================== PORTAL & GEM WORLD =====================
+function spawnPortal() {
+  // Spawn portal on a random wall edge
+  const side = Math.floor(Math.random() * 4);
+  let px, py;
+  if (side === 0) { px = 80 + Math.random() * (WORLD_W - 160); py = 60; }
+  else if (side === 1) { px = WORLD_W - 60; py = 80 + Math.random() * (WORLD_H - 160); }
+  else if (side === 2) { px = 80 + Math.random() * (WORLD_W - 160); py = WORLD_H - 60; }
+  else { px = 60; py = 80 + Math.random() * (WORLD_H - 160); }
+  portal = { x: px, y: py, r: 60, active: true, pulse: 0 };
+  // Announce portal
+  const evo = document.getElementById('evo-text');
+  evo.style.display = 'block';
+  evo.innerHTML = '<div class="evo-label" style="color:#aa44ff;">🌀 PORTAL OPENED!</div>';
+  setTimeout(() => { evo.style.display = 'none'; }, 2200);
+  playTone(110, 1.5, 'sawtooth', 0.25);
+}
+
+function openPortalScreen() {
+  gameRunning = false;
+  showHUD(false);
+  document.getElementById('portal-screen').style.display = 'flex';
+}
+
+function enterGemWorld() {
+  document.getElementById('portal-screen').style.display = 'none';
+  inGemWorld = true;
+  activeDenomsRef = GEM_DENOMINATIONS;
+  player.denomIdx = 0;
+  player.cloud = [];
+  portal = null;
+  minions = [];
+  matchUpgrades = {};
+  // Repopulate world with gem-flavored loose money (reuse same positions)
+  looseMoney = [];
+  for (let i = 0; i < LOOSE_MONEY_COUNT; i++) looseMoney.push(createGemMoney());
+  // Respawn bots at low gem levels
+  bots.forEach((b, i) => {
+    Object.assign(b, createBot(Math.min(2, Math.floor(i / 6))));
+  });
+  showHUD(true);
+  gameRunning = true;
+  lastTime = 0;
+  requestAnimationFrame(gameLoop);
+}
+
+function stayInMoneyWorld() {
+  document.getElementById('portal-screen').style.display = 'none';
+  portal = null; // close portal
+  showHUD(true);
+  gameRunning = true;
+  lastTime = 0;
+  requestAnimationFrame(gameLoop);
+}
+
+function createGemMoney() {
+  const x = 80 + Math.random() * (WORLD_W - 160);
+  const y = 80 + Math.random() * (WORLD_H - 160);
+  const r = Math.random();
+  const di = r < 0.35 ? 0 : r < 0.6 ? 1 : r < 0.78 ? 2 : r < 0.90 ? 3 : r < 0.96 ? 4 : r < 0.99 ? 5 : 6;
+  return { x, y, denomIdx: di, value: GEM_DENOMINATIONS[di].value, r: 6 + di * 2.5, age: 0, isGem: true };
+}
+
+// ===================== MINION UPDATE =====================
+function updateMinions(dt) {
+  const minionLv = getUpgradeLevel('minions');
+  if (minionLv <= 0 || minions.length === 0) return;
+  for (let i = minions.length - 1; i >= 0; i--) {
+    const m = minions[i];
+    m.life -= dt;
+    if (m.life <= 0) {
+      // Return to player — add carried value to cloud
+      if (m.carrying > 0) addToCloud(player.x, player.y, 0, m.carrying);
+      spawnParticles(m.x, m.y, '#ffd700', 6);
+      minions.splice(i, 1);
+      continue;
+    }
+    // Return home if carrying enough or low life
+    if (m.carrying > 0 && (m.life < 3 || m.carrying >= m.capacity)) {
+      const dx = player.x - m.x, dy = player.y - m.y;
+      const d = Math.sqrt(dx*dx + dy*dy);
+      if (d < 20) {
+        addToCloud(player.x, player.y, 0, m.carrying);
+        playChing(0);
+        minions.splice(i, 1);
+        continue;
+      }
+      m.x += (dx/d) * 200 * dt;
+      m.y += (dy/d) * 200 * dt;
+      continue;
+    }
+    // Hunt nearest loose money ≤ player's denomination
+    let best = null, bestDist = 99999;
+    looseMoney.forEach(lm => {
+      if (lm.denomIdx > player.denomIdx) return;
+      const dx = lm.x - m.x, dy = lm.y - m.y;
+      const d = Math.sqrt(dx*dx + dy*dy);
+      if (d < bestDist) { bestDist = d; best = lm; }
+    });
+    if (best) {
+      const dx = best.x - m.x, dy = best.y - m.y;
+      const d = Math.sqrt(dx*dx + dy*dy);
+      m.x += (dx/d) * 180 * dt;
+      m.y += (dy/d) * 180 * dt;
+      if (d < 14) {
+        m.carrying += best.value;
+        looseMoney = looseMoney.filter(lm => lm !== best);
+      }
+    } else {
+      // Wander
+      m.wx = (m.wx || player.x) + (Math.random()-0.5)*8;
+      m.wy = (m.wy || player.y) + (Math.random()-0.5)*8;
+      const dx = m.wx - m.x, dy = m.wy - m.y;
+      const d = Math.sqrt(dx*dx+dy*dy);
+      if (d > 1) { m.x += (dx/d)*120*dt; m.y += (dy/d)*120*dt; }
+    }
+    m.x = Math.max(20, Math.min(WORLD_W-20, m.x));
+    m.y = Math.max(20, Math.min(WORLD_H-20, m.y));
+  }
+}
+
+function launchMinion() {
+  const lv = getUpgradeLevel('minions');
+  if (lv <= 0) return;
+  const capacity = lv * 50;
+  const life = 12 + lv * 4;
+  minions.push({ x: player.x, y: player.y, carrying: 0, capacity, life, wx: player.x, wy: player.y });
+  playTone(880, 0.1, 'triangle', 0.12);
 }
 
 // ===================== RENDER =====================
@@ -1395,6 +1577,64 @@ function render() {
   // Safe zone
   drawSafeZone();
 
+  // Portal
+  if (portal && portal.active) {
+    portal.pulse = (portal.pulse || 0) + 0.04;
+    ctx.save();
+    ctx.translate(portal.x, portal.y);
+    const glow = ctx.createRadialGradient(0, 0, 10, 0, 0, portal.r + 20);
+    glow.addColorStop(0, 'rgba(170,68,255,0.9)');
+    glow.addColorStop(0.5, 'rgba(85,0,170,0.5)');
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.beginPath();
+    ctx.arc(0, 0, portal.r + 20 + Math.sin(portal.pulse) * 8, 0, Math.PI*2);
+    ctx.fillStyle = glow;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, 0, portal.r, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(20,0,40,0.95)';
+    ctx.fill();
+    ctx.strokeStyle = `rgba(200,100,255,${0.7+Math.sin(portal.pulse)*0.3})`;
+    ctx.lineWidth = 5;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${30 + Math.sin(portal.pulse)*4}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🌀', 0, 0);
+    ctx.restore();
+  }
+
+  // Minions
+  minions.forEach(m => {
+    ctx.save();
+    ctx.translate(m.x, m.y);
+    ctx.beginPath();
+    ctx.arc(0, 0, 9, 0, Math.PI*2);
+    ctx.fillStyle = '#ffd700';
+    ctx.fill();
+    ctx.strokeStyle = '#ff8800';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 8px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('$', 0, 0);
+    ctx.restore();
+    // Line back to player
+    ctx.save();
+    ctx.globalAlpha = 0.2;
+    ctx.strokeStyle = '#ffd700';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(m.x, m.y);
+    ctx.lineTo(player.x, player.y);
+    ctx.stroke();
+    ctx.restore();
+  });
+
   // Loose money
   looseMoney.forEach(lm => drawLooseMoney(lm));
 
@@ -1460,13 +1700,30 @@ function drawSafeZone() {
 }
 
 function drawLooseMoney(lm) {
-  const d = DENOMINATIONS[lm.denomIdx];
+  const d = lm.isGem ? GEM_DENOMINATIONS[lm.denomIdx] : DENOMINATIONS[lm.denomIdx];
+  if (!d) return;
   const pulse = 1 + Math.sin(lm.age * 4) * 0.08;
   ctx.save();
   ctx.translate(lm.x, lm.y);
   ctx.scale(pulse, pulse);
 
-  if (d.isBill) {
+  if (d.isGem) {
+    // Diamond/gem shape
+    const s = lm.r;
+    ctx.beginPath();
+    ctx.moveTo(0, -s); ctx.lineTo(s*0.7, 0); ctx.lineTo(0, s*1.1);
+    ctx.lineTo(-s*0.7, 0); ctx.closePath();
+    ctx.fillStyle = d.color;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = d.textColor;
+    ctx.font = `bold ${lm.r * 0.65}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(d.emoji, 0, 0);
+  } else if (d.isBill) {
     // Small bill rectangle
     const w = lm.r * 2.2, h = lm.r * 1.4;
     ctx.fillStyle = d.color;
@@ -1745,7 +2002,7 @@ function drawMinimap() {
 // ===================== HUD =====================
 function updateHUD() {
   if (!gameRunning) return;
-  const d = DENOMINATIONS[player.denomIdx];
+  const d = AD()[player.denomIdx];
   document.getElementById('hud-denom-icon').textContent = d.emoji;
   document.getElementById('hud-denom-name').textContent = d.name;
 
@@ -1758,9 +2015,9 @@ function updateHUD() {
   const prog = nextVal === Infinity ? 1 : Math.min(1, (total - prevVal) / (nextVal - prevVal));
   document.getElementById('hud-progress-bar').style.width = (prog * 100) + '%';
   if (nextVal === Infinity) {
-    document.getElementById('hud-progress-label').textContent = '👑 MAX DENOMINATION — YOU WIN!';
+    document.getElementById('hud-progress-label').textContent = inGemWorld ? '💎 MAX GEM — WIN!' : '🌀 MAX BILL — FIND THE PORTAL!';
   } else {
-    const next = DENOMINATIONS[player.denomIdx + 1];
+    const next = AD()[player.denomIdx + 1];
     document.getElementById('hud-progress-label').textContent = `Next: ${next.name} (${Math.round(prog * 100)}%)`;
   }
 
@@ -1777,7 +2034,7 @@ function updateHUD() {
   all.sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
   const lb = document.getElementById('hud-leaderboard-list');
   lb.innerHTML = all.slice(0, 5).map((e, i) => {
-    const d2 = DENOMINATIONS[e.denomIdx];
+    const d2 = e.name === 'YOU' ? AD()[e.denomIdx] : DENOMINATIONS[e.denomIdx];
     const isYou = e.name === 'YOU';
     return `<li style="${isYou ? 'color:#ffd700;font-weight:bold;' : ''}">${i+1}. ${d2.emoji} ${d2.name}${isYou ? ' (You)' : ''}</li>`;
   }).join('');
@@ -1830,8 +2087,8 @@ function showUpgrades(fromStart) {
 
   // Downgrade denomination card
   if (player && player.denomIdx > 0) {
-    const fromD = DENOMINATIONS[player.denomIdx];
-    const toD = DENOMINATIONS[player.denomIdx - 1];
+    const fromD = AD()[player.denomIdx];
+    const toD = AD()[player.denomIdx - 1];
     const diffVal = fromD.value - toD.value;
     const returnApprox = Math.floor(diffVal * 0.80);
     const retLabel = returnApprox >= 100 ? '$' + (returnApprox/100).toFixed(2) : returnApprox + '¢';
@@ -1852,8 +2109,8 @@ function showUpgrades(fromStart) {
 
 function downgradeDenomination() {
   if (!player || player.denomIdx <= 0) return;
-  const fromValue = DENOMINATIONS[player.denomIdx].value;
-  const toValue = DENOMINATIONS[player.denomIdx - 1].value;
+  const fromValue = AD()[player.denomIdx].value;
+  const toValue = AD()[player.denomIdx - 1].value;
   player.denomIdx--;
   const returnAmt = Math.floor((fromValue - toValue) * (0.75 + Math.random() * 0.1));
   makeRandomChange(returnAmt).forEach(coin =>
@@ -1970,6 +2227,11 @@ document.addEventListener('keydown', e => {
       baitCooldown = 15 - baitLv * 2;
       playTone(440, 0.1, 'sawtooth', 0.12);
     }
+  }
+
+  // Money Minion launch
+  if (e.code === 'KeyR' && gameRunning) {
+    launchMinion();
   }
 });
 document.addEventListener('keyup', e => { keys[e.code] = false; });
