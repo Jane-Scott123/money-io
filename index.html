@@ -80,6 +80,7 @@
 <!-- GAME OVER SCREEN -->
 <div class="screen" id="gameover-screen" style="display:none">
   <h2>💸 You Were Eaten!</h2>
+  <p id="go-best" style="color:#ffd700;font-weight:bold;font-size:clamp(14px,3.5vw,20px);"></p>
   <div class="big-stat" id="go-denom"></div>
   <p id="go-value"></p>
   <p id="go-rank"></p>
@@ -494,12 +495,13 @@ function startGame() {
 
   // Attackers removed — bots never hunt or eat the player.
 
-  // The $10,000 ghost — unkillable, roams toward the richest target
+  // The ghost — a $5K bill (not the max), unkillable, roams toward the richest target
+  const ghostIdx = DENOMINATIONS.length - 2; // $5,000 bill
   ghost = {
     x: 300 + Math.random() * (WORLD_W - 600),
     y: 200 + Math.random() * (WORLD_H - 400),
-    denomIdx: DENOMINATIONS.length - 1,
-    value: DENOMINATIONS[DENOMINATIONS.length - 1].value,
+    denomIdx: ghostIdx,
+    value: DENOMINATIONS[ghostIdx].value,
     targetX: WORLD_W / 2, targetY: WORLD_H / 2,
     wanderTimer: 0,
     face: makeFace(),
@@ -507,26 +509,35 @@ function startGame() {
     isGhost: true, chasingPlayer: true,
   };
 
-  // Red debt zones — drain cloud slowly
-  debtZones = [];
-  for (let i = 0; i < 4; i++) {
-    debtZones.push({
-      x: 300 + Math.random() * (WORLD_W - 600),
-      y: 200 + Math.random() * (WORLD_H - 400),
-      r: 90 + Math.random() * 70,
-      drainTimer: 0.8,
-    });
+  // Helper: random position whose zone circle won't overlap the safe zone
+  function randZonePos(r) {
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const x = 300 + Math.random() * (WORLD_W - 600);
+      const y = 200 + Math.random() * (WORLD_H - 400);
+      // Nearest point on the safe-zone rectangle to (x,y)
+      const nx = Math.max(SAFE_ZONE.x, Math.min(x, SAFE_ZONE.x + SAFE_ZONE.w));
+      const ny = Math.max(SAFE_ZONE.y, Math.min(y, SAFE_ZONE.y + SAFE_ZONE.h));
+      const dx = x - nx, dy = y - ny;
+      if (dx*dx + dy*dy > (r + 40) * (r + 40)) return { x, y };
+    }
+    // Fallback: top-left area, away from the bottom-right safe zone
+    return { x: 300 + Math.random() * (WORLD_W * 0.4), y: 200 + Math.random() * (WORLD_H * 0.4) };
   }
 
-  // Yellow debt safe zones — repel bounty hunters but drain money fast
+  // Red tax zones — drain cloud slowly
+  debtZones = [];
+  for (let i = 0; i < 4; i++) {
+    const r = 90 + Math.random() * 70;
+    const p = randZonePos(r);
+    debtZones.push({ x: p.x, y: p.y, r, drainTimer: 0.8 });
+  }
+
+  // Yellow safe shelters — rare; repel hunters but drain money fast
   debtSafeZones = [];
-  for (let i = 0; i < 3; i++) {
-    debtSafeZones.push({
-      x: 300 + Math.random() * (WORLD_W - 600),
-      y: 200 + Math.random() * (WORLD_H - 400),
-      r: 75 + Math.random() * 50,
-      drainTimer: 0.3,
-    });
+  for (let i = 0; i < 1; i++) {
+    const r = 75 + Math.random() * 50;
+    const p = randZonePos(r);
+    debtSafeZones.push({ x: p.x, y: p.y, r, drainTimer: 0.3 });
   }
 
   wantedBots = [];
@@ -1453,8 +1464,21 @@ function gameOver(win) {
       ...bots.map(b => ({ denomIdx: b.denomIdx, value: b.value }))];
     allEntities.sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
     const rank = allEntities.findIndex(e => e.isPlayer) + 1;
+
+    // All-time best score (localStorage)
+    let best = 0;
+    try { best = parseInt(localStorage.getItem('moneyio_best') || '0', 10) || 0; } catch(e) {}
+    const isNewBest = total > best;
+    if (isNewBest) { best = total; try { localStorage.setItem('moneyio_best', String(best)); } catch(e) {} }
+    const bestEl = document.getElementById('go-best');
+    if (bestEl) {
+      bestEl.textContent = isNewBest
+        ? `🏆 NEW BEST! All-Time High: $${(best / 100).toFixed(2)}`
+        : `🏆 All-Time Best: $${(best / 100).toFixed(2)}`;
+    }
+
     document.getElementById('go-denom').textContent = AD()[player.denomIdx].emoji + ' ' + AD()[player.denomIdx].name;
-    document.getElementById('go-value').textContent = `Value: $${(total / 100).toFixed(2)} (cloud: $${(cloudValue(player.cloud)/100).toFixed(2)})`;
+    document.getElementById('go-value').textContent = `This Run: $${(total / 100).toFixed(2)} (cloud: $${(cloudValue(player.cloud)/100).toFixed(2)})`;
     document.getElementById('go-rank').textContent = `Leaderboard Position: #${rank} of ${allEntities.length}`;
     document.getElementById('gameover-screen').style.display = 'flex';
   }
@@ -1635,7 +1659,7 @@ function render() {
     ctx.font = 'bold 12px Arial';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('💸 TAX ZONE', dz.x, dz.y);
+    ctx.fillText('💸 TAX', dz.x, dz.y);
     ctx.restore();
   });
 
@@ -1656,7 +1680,7 @@ function render() {
     ctx.font = 'bold 11px Arial';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('⚡ TAX SHELTER', dz.x, dz.y - 8);
+    ctx.fillText('⚡ SAFE SHELTER', dz.x, dz.y - 8);
     ctx.fillStyle = 'rgba(255,200,50,0.7)';
     ctx.font = '10px Arial';
     ctx.fillText('hunters flee • drains money', dz.x, dz.y + 8);
