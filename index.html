@@ -96,7 +96,7 @@
 <!-- PORTAL SCREEN -->
 <div class="screen" id="portal-screen" style="display:none; background:rgba(0,0,30,0.97);">
   <h1 style="color:#aa44ff;text-shadow:0 0 40px #7700ff,0 4px 0 #330088;">🌀 PORTAL FOUND!</h1>
-  <p style="font-size:20px;color:#ddd;">You've reached the <strong style="color:#ffd700;">$5,000 Bill</strong>!</p>
+  <p style="font-size:20px;color:#ddd;">You've reached the <strong style="color:#ffd700;">$10,000 Bill</strong>!</p>
   <p>A dimensional rift has opened. Step through to enter the <strong style="color:#aa44ff;">Gem World</strong> — a new ladder awaits.</p>
   <button class="btn" style="background:linear-gradient(135deg,#aa44ff,#5500cc);" onclick="enterGemWorld()">🌀 Enter Gem World</button>
   <button class="btn btn-secondary" onclick="stayInMoneyWorld()">Stay Here</button>
@@ -161,7 +161,8 @@ const DENOMINATIONS = [
   { name: '$100 Bill',   symbol: '$100',emoji: '💵', value: 10000,   evolveAt: 50000,   color: '#00695c', textColor: '#e0f2f1', radius: 58, isBill: true },
   { name: '$500 Bill',   symbol: '$500',emoji: '💵', value: 50000,   evolveAt: 100000,  color: '#4527a0', textColor: '#ede7f6', radius: 66, isBill: true },
   { name: '$1,000 Bill', symbol: '$1K', emoji: '💵', value: 100000,  evolveAt: 500000,  color: '#880e4f', textColor: '#fce4ec', radius: 74, isBill: true },
-  { name: '$5,000 Bill', symbol: '$5K', emoji: '🏆', value: 500000,  evolveAt: Infinity, color: '#000000', textColor: '#ffd700', radius: 90, isBill: true },
+  { name: '$5,000 Bill', symbol: '$5K', emoji: '💵', value: 500000,  evolveAt: 1000000, color: '#bf360c', textColor: '#fff3e0', radius: 82, isBill: true },
+  { name: '$10,000 Bill',symbol: '$10K',emoji: '🏆', value: 1000000, evolveAt: Infinity, color: '#000000', textColor: '#ffd700', radius: 90, isBill: true },
 ];
 
 // Gem world denominations (portal world)
@@ -179,12 +180,19 @@ let WORLD_W = 3000;
 let WORLD_H = 2400;
 const BASE_WORLD_W = 3000;
 const BASE_WORLD_H = 2400;
-const SAFE_ZONE = { x: WORLD_W - 400, y: WORLD_H - 360, w: 380, h: 340 };
+const SAFE_ZONE = { w: 520, h: 460, x: 0, y: 0 };
+// Keep the safe zone pinned to the bottom-right corner for the current world size
+function positionSafeZone() {
+  SAFE_ZONE.x = WORLD_W - SAFE_ZONE.w - 20;
+  SAFE_ZONE.y = WORLD_H - SAFE_ZONE.h - 20;
+}
+positionSafeZone();
+const BASE_MONEY_DENSITY = 300 / (3000 * 2400); // loose money per world unit²
+function targetMoneyCount() { return Math.round(WORLD_W * WORLD_H * BASE_MONEY_DENSITY); }
 const LOOSE_MONEY_COUNT = 300;
 const BOT_COUNT = 18;
 const MINIMAP_SCALE = 100 / WORLD_W;
 const RESTOCK_INTERVAL = 4; // seconds between restock checks
-const RESTOCK_TARGET = LOOSE_MONEY_COUNT;
 
 let restockTimer = 0;
 
@@ -419,8 +427,22 @@ function makeFace() {
   return { eyeOff: Math.random() * 0.3 - 0.15, mouthStyle: Math.floor(Math.random() * 3) };
 }
 
+// Pick a bot spawn denomination that scales with the player's current level, so there are
+// always threats of varying size near (and above) the player as they grow.
+function pickBotDenom() {
+  const pIdx = player ? player.denomIdx : 0;
+  const maxIdx = DENOMINATIONS.length - 1;
+  const r = Math.random();
+  // Spread: some smaller, some near, some larger than the player
+  let di;
+  if (r < 0.35) di = Math.max(0, pIdx - 2 - Math.floor(Math.random() * 2)); // smaller prey
+  else if (r < 0.70) di = Math.min(maxIdx, pIdx + Math.floor(Math.random() * 2)); // near/at level
+  else di = Math.min(maxIdx, pIdx + 1 + Math.floor(Math.random() * 3)); // larger threats
+  return Math.max(0, Math.min(maxIdx, di));
+}
+
 function createBot(denomIdx = null) {
-  const di = denomIdx !== null ? denomIdx : Math.floor(Math.random() * 5);
+  const di = denomIdx !== null ? denomIdx : pickBotDenom();
   const d = DENOMINATIONS[di];
   return {
     x: Math.random() * (WORLD_W - 200) + 100,
@@ -473,13 +495,21 @@ function startGame() {
   // Upgrades reset each match
   matchUpgrades = {};
 
+  // Reset world size FIRST (a prior match may have expanded it) so entities spawn correctly
+  boardExpansions = 0;
+  WORLD_W = BASE_WORLD_W;
+  WORLD_H = BASE_WORLD_H;
+  inGemWorld = false;
+  activeDenomsRef = DENOMINATIONS;
+  positionSafeZone();
+
   player = createPlayer();
 
   bots = [];
   for (let i = 0; i < BOT_COUNT; i++) bots.push(createBot());
 
   looseMoney = [];
-  for (let i = 0; i < LOOSE_MONEY_COUNT; i++) looseMoney.push(createLooseMoney());
+  for (let i = 0; i < targetMoneyCount(); i++) looseMoney.push(createLooseMoney());
 
   particles = [];
   baits = [];
@@ -656,9 +686,11 @@ function update(dt) {
   restockTimer -= dt;
   if (restockTimer <= 0) {
     restockTimer = RESTOCK_INTERVAL;
-    const deficit = RESTOCK_TARGET - looseMoney.length;
-    const batch = Math.min(deficit, 12); // spawn up to 12 per tick
-    for (let i = 0; i < batch; i++) looseMoney.push(createLooseMoney());
+    const deficit = targetMoneyCount() - looseMoney.length;
+    const batch = Math.min(deficit, 40); // spawn up to 40 per tick to fill big boards faster
+    for (let i = 0; i < batch; i++) {
+      looseMoney.push(inGemWorld ? createGemMoney() : createLooseMoney());
+    }
   }
 
   // Evolution check: must have exact change in cloud (no overpaying)
@@ -744,7 +776,9 @@ function update(dt) {
         bot.cloudCoins.forEach(cc => addToCloud(bot.x, bot.y, cc.denomIdx, cc.value));
         playEatPlayer(player.denomIdx);
         spawnParticles(bot.x, bot.y, denomD.color, 14);
-        Object.assign(bot, createBot(0));
+        const wasHunter = bot.isBountyHunter;
+        Object.assign(bot, createBot());
+        bot.isBountyHunter = wasHunter;
         return;
       }
     }
@@ -766,7 +800,9 @@ function update(dt) {
           });
         });
         spawnParticles(other.x, other.y, DENOMINATIONS[other.denomIdx].color, 10);
-        Object.assign(other, createBot(0));
+        const wasHunter = other.isBountyHunter;
+        Object.assign(other, createBot());
+        other.isBountyHunter = wasHunter;
       }
     }
 
@@ -806,7 +842,14 @@ function update(dt) {
       if (dx*dx + dy*dy < r*r) {
         if (player.armorHits > 0) {
           player.armorHits--;
-          stunTimer = 1.2;
+          stunTimer = 0.5;
+          // Knock the attacker far away and stun it so armor actually buys you escape room
+          const kd = Math.sqrt(dx*dx + dy*dy) || 1;
+          bot.x += (dx/kd) * 240;
+          bot.y += (dy/kd) * 240;
+          bot.x = Math.max(30, Math.min(WORLD_W-30, bot.x));
+          bot.y = Math.max(30, Math.min(WORLD_H-30, bot.y));
+          bot.stunTimer = 1.5;
           spawnParticles(player.x, player.y, '#ff0000', 10);
           playBounce();
           // Scatter 2–3 cloud coins — you're bleeding money
@@ -1065,6 +1108,16 @@ function updateBot(bot, dt) {
 
   // Bounty hunters: chase player only if larger; flee from safe zone
   if (bot.isBountyHunter) {
+    // Keep bounty hunters a real threat — scale them to stay at least one denom above the player
+    if (bot.denomIdx < player.denomIdx + 1) {
+      bot.growTimer = (bot.growTimer || 0) - dt;
+      if (bot.growTimer <= 0) {
+        bot.growTimer = 2.5;
+        bot.denomIdx = Math.min(DENOMINATIONS.length - 1, player.denomIdx + 1);
+        bot.value = DENOMINATIONS[bot.denomIdx].value * (1 + Math.random() * 0.5);
+        spawnParticles(bot.x, bot.y, '#ff2222', 8);
+      }
+    }
     const canEatPlayer = bot.denomIdx > player.denomIdx;
 
     if (playerProtected) {
@@ -1231,6 +1284,7 @@ function drawBotCloud(bot) {
 }
 
 function updateGhost(dt) {
+  if (ghost.stunTimer > 0) { ghost.stunTimer -= dt; return; }
   ghost.wanderTimer -= dt;
   if (ghost.wanderTimer <= 0) {
     if (ghostSummonTarget && bots.includes(ghostSummonTarget)) {
@@ -1267,7 +1321,14 @@ function updateGhost(dt) {
     if (pdx*pdx + pdy*pdy < (gr + playerRadius()) * (gr + playerRadius())) {
       if (player.armorHits > 0) {
         player.armorHits--;
-        stunTimer = 1.5;
+        stunTimer = 0.5;
+        // Knock the ghost back and stun it so armor buys escape room
+        const kd = Math.sqrt(pdx*pdx + pdy*pdy) || 1;
+        ghost.x += (pdx/kd) * 260;
+        ghost.y += (pdy/kd) * 260;
+        ghost.x = Math.max(60, Math.min(WORLD_W-60, ghost.x));
+        ghost.y = Math.max(60, Math.min(WORLD_H-60, ghost.y));
+        ghost.stunTimer = 1.5;
         spawnParticles(player.x, player.y, '#ff0000', 12);
         playBounce();
         const scatterN = Math.min(player.cloud.length, 3);
@@ -1296,7 +1357,9 @@ function updateGhost(dt) {
     const gr = denomRadius(ghost.denomIdx);
     if (dx*dx + dy*dy < (gr + denomRadius(bot.denomIdx)) * (gr + denomRadius(bot.denomIdx))) {
       spawnParticles(bot.x, bot.y, DENOMINATIONS[bot.denomIdx].color, 10);
-      Object.assign(bot, createBot(Math.floor(Math.random() * 3)));
+      const wasHunter = bot.isBountyHunter;
+      Object.assign(bot, createBot());
+      bot.isBountyHunter = wasHunter;
     }
   });
 }
@@ -1430,7 +1493,7 @@ function gameOver(win) {
     const winMsg = document.getElementById('win-msg');
     if (winMsg) winMsg.innerHTML = inGemWorld
       ? 'You reached the legendary <strong>💎 Diamond!</strong> You conquered both worlds!'
-      : 'You reached the legendary <strong>🏆 $5,000 Bill!</strong>';
+      : 'You reached the legendary <strong>🏆 $10,000 Bill!</strong>';
     document.getElementById('win-screen').style.display = 'flex';
   } else {
     // Drop half cloud coins on the floor at death location (others can scavenge)
@@ -2263,9 +2326,12 @@ function buyUpgrade(id) {
     boardExpansions++;
     WORLD_W = BASE_WORLD_W + boardExpansions * 800;
     WORLD_H = BASE_WORLD_H + boardExpansions * 640;
-    // Spawn extra loose money in the newly expanded area
-    const extra = 80 + boardExpansions * 40;
-    for (let i = 0; i < extra; i++) looseMoney.push(createLooseMoney());
+    positionSafeZone(); // keep the safe zone in the corner of the new, larger board
+    // Fill the bigger board up to its proportional money target
+    const deficit = targetMoneyCount() - looseMoney.length;
+    for (let i = 0; i < deficit; i++) {
+      looseMoney.push(inGemWorld ? createGemMoney() : createLooseMoney());
+    }
     spawnParticles(player.x, player.y, '#00ccff', 20);
     playEvo(player.denomIdx);
   } else if (id === 'moneybomb') {
