@@ -195,10 +195,9 @@ const BASE_SPEEDS = [210, 200, 195, 185, 175, 160, 148, 138, 125, 112, 100, 90, 
 // costs are in cents (matching the game's value unit)
 const UPGRADE_DEFS = [
   { id: 'speed',    name: 'Move Speed',        desc: '+5% speed per level',                        max: 10, costs: [8,20,40,70,110,160,220,300,400,550] },
-  { id: 'radius',   name: 'Eat Radius',        desc: '+8% eat/absorb radius per level',            max: 10, costs: [10,25,50,90,140,210,300,420,580,800] },
+  { id: 'radius',   name: 'Eat Radius',        desc: '+20% eat range per level (visible ring)',    max: 5,  costs: [25,80,200,500,1200] },
   { id: 'magnet',   name: 'Magnetism',         desc: 'Pull loose money ≤ your size toward you',   max: 8,  costs: [15,40,80,140,220,340,500,720] },
   { id: 'armor',    name: 'Armor',             desc: 'Survive hits from larger players',           max: 5,  costs: [50,120,250,500,1000] },
-  { id: 'boost',    name: 'Mint Boost',        desc: 'E: speed burst, 10s cooldown',              max: 5,  costs: [30,80,180,400,900] },
   { id: 'bait',     name: 'Counterfeit Bait',  desc: 'Q: drop decoy — eaters get downgraded',     max: 5,  costs: [40,100,220,500,1100] },
   { id: 'ghost',    name: 'Ghost Summon',      desc: 'Send the $10K ghost after a target (one-use per summon)', max: 3, costs: [500,2000,8000] },
   { id: 'expand',   name: 'Expand Board',      desc: 'Grow the world — more room, more money',    max: 3,  costs: [300,1200,5000] },
@@ -356,7 +355,30 @@ function addToCloud(wx, wy, denomIdx, value) {
   });
 }
 
-// Remove cloud coins totalling at least `costCents`; returns true if successful
+// Check if exact change for targetCents can be made from cloud (greedy, works for standard coin sets)
+function canMakeExact(cloud, targetCents) {
+  const sorted = [...cloud].sort((a, b) => b.value - a.value);
+  let remaining = targetCents;
+  for (const c of sorted) {
+    if (c.value <= remaining) remaining -= c.value;
+    if (remaining === 0) return true;
+  }
+  return remaining === 0;
+}
+
+// Remove cloud coins summing to exactly targetCents; mutates player.cloud in place
+function spendExact(cloud, targetCents) {
+  const sorted = [...cloud].sort((a, b) => b.value - a.value);
+  const toRemove = new Set();
+  let remaining = targetCents;
+  for (const c of sorted) {
+    if (c.value <= remaining) { toRemove.add(c); remaining -= c.value; }
+    if (remaining === 0) break;
+  }
+  player.cloud = player.cloud.filter(c => !toRemove.has(c));
+}
+
+// Remove cloud coins totalling at least `costCents`; returns true if successful (used for upgrades)
 function spendCloudCoins(costCents) {
   if (cloudValue(player.cloud) < costCents) return false;
   // Sort ascending by value so we spend smallest coins first
@@ -619,16 +641,16 @@ function update(dt) {
     for (let i = 0; i < batch; i++) looseMoney.push(createLooseMoney());
   }
 
-  // Evolution check: total value (denom base + cloud) must reach evolveAt
+  // Evolution check: must have exact change in cloud (no overpaying)
   const total = playerTotalValue();
   const activeDenoms = AD();
-  while (player.denomIdx < activeDenoms.length - 1 &&
-         total >= activeDenoms[player.denomIdx].evolveAt) {
+  if (player.denomIdx < activeDenoms.length - 1) {
     const needed = activeDenoms[player.denomIdx].evolveAt - activeDenoms[player.denomIdx].value;
-    if (needed > 0) spendCloudCoins(needed);
-    player.denomIdx++;
-    triggerEvolution(player.denomIdx);
-    break; // re-check next frame
+    if (needed <= 0 || canMakeExact(player.cloud, needed)) {
+      if (needed > 0) spendExact(player.cloud, needed);
+      player.denomIdx++;
+      triggerEvolution(player.denomIdx);
+    }
   }
 
   // Max denom reached
@@ -768,11 +790,10 @@ function update(dt) {
     }
   });
 
-  // Bait logic — any bot that eats it gets downgraded one denomination (player immune)
+  // Bait logic — any bot that eats it gets downgraded one denomination (player immune); lasts forever
   for (let bi = baits.length - 1; bi >= 0; bi--) {
     const bait = baits[bi];
     bait.age += dt;
-    if (bait.age > 8) { baits.splice(bi, 1); continue; }
     let hit = false;
     bots.forEach(bot => {
       if (hit) return;
@@ -809,16 +830,32 @@ function update(dt) {
     playDebtDrain();
   }
 
-  // Red debt zones: drain one coin every 0.8s
+  // Red tax zones: drain player cloud every 0.8s; also drain bots inside
   debtZones.forEach(dz => {
     const dx = player.x - dz.x, dy = player.y - dz.y;
     if (dx*dx + dy*dy < dz.r * dz.r) {
       dz.drainTimer -= dt;
       if (dz.drainTimer <= 0) { dz.drainTimer = 0.8; drainOneCloudCoin(dz); }
     } else { dz.drainTimer = Math.min(dz.drainTimer + dt * 0.4, 0.8); }
+    // Bots also taxed
+    bots.forEach(bot => {
+      const bdx = bot.x - dz.x, bdy = bot.y - dz.y;
+      if (bdx*bdx + bdy*bdy < dz.r * dz.r) {
+        if (!bot._taxTimer) bot._taxTimer = 0.8;
+        bot._taxTimer -= dt;
+        if (bot._taxTimer <= 0) {
+          bot._taxTimer = 0.8;
+          if (bot.cloudCoins.length > 0) {
+            bot.cloudCoins.shift();
+          } else if (bot.value > DENOMINATIONS[bot.denomIdx].value) {
+            bot.value = Math.max(DENOMINATIONS[bot.denomIdx].value, bot.value * 0.85);
+          }
+        }
+      }
+    });
   });
 
-  // Yellow debt safe zones: drain very fast (0.3s), but repel bounty hunters
+  // Yellow tax safe zones: drain fast (0.3s), but repel bounty hunters
   debtSafeZones.forEach(dz => {
     const dx = player.x - dz.x, dy = player.y - dz.y;
     if (dx*dx + dy*dy < dz.r * dz.r) {
@@ -921,13 +958,13 @@ function updateCloud(dt) {
   });
 }
 
-function playerRadius() { return AD()[player.denomIdx].radius * (1 + getUpgradeLevel('radius') * 0.06); }
-function playerEatRadius() { return playerRadius() * 1.15; }
+function playerRadius() { return AD()[player.denomIdx].radius; }
+function playerEatRadius() { return playerRadius() * (1.15 + getUpgradeLevel('radius') * 0.20); }
 function denomRadius(di) { return DENOMINATIONS[di].radius; }
 
 function playerSpeed() {
   const base = BASE_SPEEDS[player.denomIdx] || 100;
-  const boost = (mintBoostActive > 0) ? 1.8 : 1;
+  const boost = 1;
   const lvBoost = 1 + getUpgradeLevel('speed') * 0.05;
   const dashBoost = dashActive ? 1.5 : 1;
   return base * boost * lvBoost * dashBoost;
@@ -1529,7 +1566,7 @@ function render() {
   for (let x = 0; x < WORLD_W; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD_H); ctx.stroke(); }
   for (let y = 0; y < WORLD_H; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD_W, y); ctx.stroke(); }
 
-  // Red debt zones
+  // Red tax zones
   debtZones.forEach(dz => {
     ctx.save();
     const pulse = 0.12 + Math.sin(Date.now() * 0.0025) * 0.05;
@@ -1546,11 +1583,11 @@ function render() {
     ctx.font = 'bold 12px Arial';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('💸 DEBT ZONE', dz.x, dz.y);
+    ctx.fillText('💸 TAX ZONE', dz.x, dz.y);
     ctx.restore();
   });
 
-  // Yellow debt safe zones (repel hunters, faster drain)
+  // Yellow tax safe zones (repel hunters, faster drain)
   debtSafeZones.forEach(dz => {
     ctx.save();
     const pulse = 0.13 + Math.sin(Date.now() * 0.003 + 1) * 0.06;
@@ -1567,10 +1604,10 @@ function render() {
     ctx.font = 'bold 11px Arial';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('⚡ DEBT SAFE', dz.x, dz.y - 8);
+    ctx.fillText('⚡ TAX SHELTER', dz.x, dz.y - 8);
     ctx.fillStyle = 'rgba(255,200,50,0.7)';
     ctx.font = '10px Arial';
-    ctx.fillText('hunters flee • costs money', dz.x, dz.y + 8);
+    ctx.fillText('hunters flee • drains money', dz.x, dz.y + 8);
     ctx.restore();
   });
 
@@ -1900,6 +1937,18 @@ function drawEntity(e, isPlayer = false) {
     ctx.stroke();
   }
 
+  // Eat radius ring (visible when upgraded)
+  if (isPlayer && getUpgradeLevel('radius') > 0) {
+    const eatR = playerEatRadius();
+    ctx.beginPath();
+    ctx.arc(0, 0, eatR, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(100,255,100,${0.25 + Math.sin(Date.now()*0.004)*0.1})`;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   // Dash indicator — orange burning ring
   if (isPlayer && dashActive) {
     const dp = 1.0;
@@ -2069,19 +2118,41 @@ function showUpgrades(fromStart) {
       `<div class="level-pip ${i < lv ? 'filled' : ''}"></div>`
     ).join('');
 
-    card.innerHTML = `
-      <h4>${def.name}</h4>
-      <p>${def.desc}</p>
-      <div class="level-bar">${pips}</div>
-      ${maxed
-        ? `<div class="maxed">✅ MAX</div>`
-        : `<div class="cost">Cost: ${costLabel} from your cloud</div>
-           <button class="btn" style="font-size:12px;padding:8px 16px;${!canAfford ? 'opacity:0.4;' : ''}"
-             onclick="buyUpgrade('${def.id}')" ${!canAfford ? 'disabled' : ''}>
-             Upgrade (Lv ${lv} → ${lv+1})
-           </button>`
-      }
-    `;
+    if (def.id === 'ghost') {
+      const summoning = ghostSummonTarget && bots.includes(ghostSummonTarget);
+      const summonCostCents = def.costs[0]; // cost per summon
+      const canSummon = lv > 0 && cv >= summonCostCents && !summoning;
+      const summonLabel = summonCostCents >= 100 ? '$'+(summonCostCents/100).toFixed(2) : summonCostCents+'¢';
+      card.innerHTML = `
+        <h4>👻 Ghost Summon</h4>
+        <p>${def.desc}</p>
+        <div class="level-bar">${pips}</div>
+        ${lv === 0
+          ? `<div class="cost">Unlock cost: ${costLabel}</div>
+             <button class="btn" style="font-size:12px;padding:8px 16px;${!canAfford?'opacity:0.4;':''}"
+               onclick="buyUpgrade('ghost')" ${!canAfford?'disabled':''}>Unlock Ghost Summon</button>`
+          : summoning
+            ? `<div class="maxed" style="color:#aa44ff;">👻 GHOST SUMMONED!</div>`
+            : `<div class="cost">Summon cost: ${summonLabel} from cloud</div>
+               <button class="btn" style="font-size:12px;padding:8px 16px;background:linear-gradient(135deg,#8800ff,#5500cc);color:#fff;${!canSummon?'opacity:0.4;':''}"
+                 onclick="summonGhost()" ${!canSummon?'disabled':''}>👻 Summon Ghost</button>`
+        }
+      `;
+    } else {
+      card.innerHTML = `
+        <h4>${def.name}</h4>
+        <p>${def.desc}</p>
+        <div class="level-bar">${pips}</div>
+        ${maxed
+          ? `<div class="maxed">✅ MAX</div>`
+          : `<div class="cost">Cost: ${costLabel} from your cloud</div>
+             <button class="btn" style="font-size:12px;padding:8px 16px;${!canAfford ? 'opacity:0.4;' : ''}"
+               onclick="buyUpgrade('${def.id}')" ${!canAfford ? 'disabled' : ''}>
+               Upgrade (Lv ${lv} → ${lv+1})
+             </button>`
+        }
+      `;
+    }
     grid.appendChild(card);
   });
 
@@ -2146,17 +2217,7 @@ function buyUpgrade(id) {
   if (id === 'armor') player.armorHits = matchUpgrades.armor;
 
   // Instant-effect upgrades
-  if (id === 'ghost') {
-    // Send ghost after the largest bot
-    const target = bots.reduce((best, b) => (!best || b.value > best.value) ? b : best, null);
-    if (target) {
-      ghostSummonTarget = target;
-      if (ghost) { ghost.targetX = target.x; ghost.targetY = target.y; ghost.wanderTimer = 0; }
-      spawnParticles(player.x, player.y, '#9900ff', 16);
-      playTone(110, 0.6, 'sawtooth', 0.22);
-    }
-    matchUpgrades[id] = lv; // ghost summon doesn't stack levels, it's per-use — reset after fire
-  } else if (id === 'expand') {
+  if (id === 'expand') {
     boardExpansions++;
     WORLD_W = BASE_WORLD_W + boardExpansions * 800;
     WORLD_H = BASE_WORLD_H + boardExpansions * 640;
@@ -2184,6 +2245,21 @@ function buyUpgrade(id) {
 }
 
 
+function summonGhost() {
+  if (!player) return;
+  const def = UPGRADE_DEFS.find(d => d.id === 'ghost');
+  const summonCost = def.costs[0];
+  if (!spendCloudCoins(summonCost)) return;
+  const target = bots.reduce((best, b) => (!best || b.value > best.value) ? b : best, null);
+  if (target) {
+    ghostSummonTarget = target;
+    if (ghost) { ghost.targetX = target.x; ghost.targetY = target.y; ghost.wanderTimer = 0; }
+    spawnParticles(player.x, player.y, '#9900ff', 16);
+    playTone(110, 0.6, 'sawtooth', 0.22);
+  }
+  showUpgrades(false);
+}
+
 function hideUpgrades() {
   document.getElementById('upgrade-screen').style.display = 'none';
   if (player && upgradeReturnToGame) {
@@ -2199,16 +2275,6 @@ function hideUpgrades() {
 // ===================== INPUT =====================
 document.addEventListener('keydown', e => {
   keys[e.code] = true;
-
-  // Mint Boost (E key)
-  if (e.code === 'KeyE' && gameRunning && mintBoostCooldown <= 0) {
-    const boostLv = getUpgradeLevel('boost');
-    if (boostLv > 0) {
-      mintBoostActive = 1.5 + boostLv * 0.3;
-      mintBoostCooldown = 10;
-      playTone(880, 0.15, 'square', 0.15);
-    }
-  }
 
   // Space is used for dash (hold to speed) — prevent page scroll
   if (e.code === 'Space') e.preventDefault();
