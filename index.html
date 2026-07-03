@@ -286,36 +286,7 @@ function playHeartbeat(intensity) {
 }
 function playDebtDrain() { playTone(180, 0.08, 'sawtooth', 0.06); }
 
-// Background music (simple procedural)
-let bgMusicStarted = false;
-function startBgMusic() {
-  if (bgMusicStarted) return;
-  bgMusicStarted = true;
-  let ac;
-  try { ac = getAudioCtx(); } catch(e) { return; }
-  const jazzChords = [
-    [261, 329, 392, 493], [293, 369, 440, 554], [246, 311, 370, 466],
-    [220, 277, 330, 415], [261, 329, 392, 493]
-  ];
-  let ci = 0;
-  function playChord() {
-    if (!gameRunning) { setTimeout(playChord, 2000); return; }
-    const chord = jazzChords[ci % jazzChords.length];
-    chord.forEach(f => {
-      const osc = ac.createOscillator();
-      const gain = ac.createGain();
-      osc.connect(gain); gain.connect(ac.destination);
-      osc.type = 'triangle';
-      osc.frequency.value = f;
-      gain.gain.setValueAtTime(0.03, ac.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 1.6);
-      osc.start(); osc.stop(ac.currentTime + 1.8);
-    });
-    ci++;
-    setTimeout(playChord, 1800);
-  }
-  playChord();
-}
+// Background music removed — sound effects only.
 
 // ===================== ENTITIES =====================
 // Active denominations for the player (money world or gem world)
@@ -576,7 +547,6 @@ function startGame() {
   gameRunning = true;
   lastTime = 0;
   requestAnimationFrame(gameLoop);
-  try { startBgMusic(); } catch(e) {}
 }
 
 function hideAllScreens() {
@@ -1313,9 +1283,11 @@ function updateGhost(dt) {
   ghost.x = Math.max(60, Math.min(WORLD_W - 60, ghost.x));
   ghost.y = Math.max(60, Math.min(WORLD_H - 60, ghost.y));
 
-  // Ghost eats player — respects all safe zones; can't eat a max-denomination player
-  const playerAtMax = player.denomIdx >= AD().length - 1;
-  if (!playerAtMax && !inSafeZone(player.x, player.y) && !debtSafeZones.some(dz => { const dx=player.x-dz.x,dy=player.y-dz.y; return dx*dx+dy*dy<dz.r*dz.r; })) {
+  // Ghost eats player — respects all safe zones; can't eat you once you're a $5K bill or bigger
+  // (top two money tiers), or the top gem tier.
+  const ghostImmuneIdx = inGemWorld ? GEM_DENOMINATIONS.length - 1 : DENOMINATIONS.length - 2;
+  const playerSafeFromGhost = player.denomIdx >= ghostImmuneIdx;
+  if (!playerSafeFromGhost && !inSafeZone(player.x, player.y) && !debtSafeZones.some(dz => { const dx=player.x-dz.x,dy=player.y-dz.y; return dx*dx+dy*dy<dz.r*dz.r; })) {
     const pdx = ghost.x - player.x, pdy = ghost.y - player.y;
     const gr = denomRadius(ghost.denomIdx);
     if (pdx*pdx + pdy*pdy < (gr + playerRadius()) * (gr + playerRadius())) {
