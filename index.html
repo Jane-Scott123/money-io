@@ -492,9 +492,7 @@ function startGame() {
   stunTimer = 0;
   restockTimer = 0;
 
-  // Mark 2 bots as bounty hunters (always chase highest-value player, 1.4× speed)
-  bots[0].isBountyHunter = true;
-  bots[1].isBountyHunter = true;
+  // Attackers removed — bots never hunt or eat the player.
 
   // The $10,000 ghost — unkillable, roams toward the richest target
   ghost = {
@@ -1092,55 +1090,6 @@ function updateBot(bot, dt) {
     return ddx*ddx + ddy*ddy < dz.r * dz.r;
   });
   const playerProtected = playerInSafe || playerInDebtSafe;
-
-  // Bounty hunters: chase player only if larger; flee from safe zone
-  if (bot.isBountyHunter) {
-    // Keep bounty hunters a real threat — scale them to stay at least one denom above the player
-    if (bot.denomIdx < player.denomIdx + 1) {
-      bot.growTimer = (bot.growTimer || 0) - dt;
-      if (bot.growTimer <= 0) {
-        bot.growTimer = 2.5;
-        bot.denomIdx = Math.min(DENOMINATIONS.length - 1, player.denomIdx + 1);
-        bot.value = DENOMINATIONS[bot.denomIdx].value * (1 + Math.random() * 0.5);
-        spawnParticles(bot.x, bot.y, '#ff2222', 8);
-      }
-    }
-    const canEatPlayer = bot.denomIdx > player.denomIdx;
-
-    if (playerProtected) {
-      // Flee away from whichever safe zone the player is in
-      const fleeFrom = playerInSafe
-        ? { x: SAFE_ZONE.x + SAFE_ZONE.w/2, y: SAFE_ZONE.y + SAFE_ZONE.h/2 }
-        : debtSafeZones.find(dz => { const ddx=player.x-dz.x,ddy=player.y-dz.y; return ddx*ddx+ddy*ddy<dz.r*dz.r; }) || { x: player.x, y: player.y };
-      bot.targetX = bot.x + (bot.x - fleeFrom.x) * 3;
-      bot.targetY = bot.y + (bot.y - fleeFrom.y) * 3;
-      bot.chasingPlayer = false;
-    } else if (canEatPlayer) {
-      bot.targetX = player.x;
-      bot.targetY = player.y;
-      bot.chasingPlayer = true;
-    } else {
-      // Too small to threaten player — wander
-      bot.chasingPlayer = false;
-      if (bot.wanderTimer <= 0) {
-        bot.targetX = 100 + Math.random() * (WORLD_W - 200);
-        bot.targetY = 100 + Math.random() * (WORLD_H - 200);
-        bot.wanderTimer = 2 + Math.random() * 2;
-      }
-    }
-
-    const bdx = bot.targetX - bot.x, bdy = bot.targetY - bot.y;
-    const bdist = Math.sqrt(bdx*bdx + bdy*bdy);
-    if (bdist > 4) {
-      const spd = (BASE_SPEEDS[bot.denomIdx] || 100) * 0.72 * 1.4;
-      bot.x += (bdx / bdist) * spd * dt;
-      bot.y += (bdy / bdist) * spd * dt;
-    }
-    const br = denomRadius(bot.denomIdx);
-    bot.x = Math.max(br, Math.min(WORLD_W - br, bot.x));
-    bot.y = Math.max(br, Math.min(WORLD_H - br, bot.y));
-    return;
-  }
 
   // Check if player is near evolution (>80%) — amps up bot aggression range
   const denom = AD()[player.denomIdx];
