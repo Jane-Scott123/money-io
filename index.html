@@ -188,7 +188,7 @@ function positionSafeZone() {
 }
 positionSafeZone();
 const BASE_MONEY_DENSITY = 300 / (3000 * 2400); // loose money per world unit²
-function targetMoneyCount() { return Math.round(WORLD_W * WORLD_H * BASE_MONEY_DENSITY); }
+function targetMoneyCount() { return Math.min(650, Math.round(WORLD_W * WORLD_H * BASE_MONEY_DENSITY)); }
 const LOOSE_MONEY_COUNT = 300;
 const BOT_COUNT = 18;
 const MINIMAP_SCALE = 100 / WORLD_W;
@@ -345,9 +345,10 @@ function findExactChange(cloud, targetCents) {
   const values = Object.keys(counts).map(Number).sort((a, b) => b - a);
 
   const result = {};
+  let budget = 20000; // hard cap on search steps to guarantee it never freezes the frame
   function dfs(idx, remaining) {
     if (remaining === 0) return true;
-    if (idx >= values.length || remaining < 0) return false;
+    if (idx >= values.length || remaining < 0 || --budget <= 0) return false;
     const v = values[idx];
     const maxUse = Math.min(counts[v], Math.floor(remaining / v));
     // Try using the most of this denom first (down to 0)
@@ -663,15 +664,31 @@ function update(dt) {
     }
   }
 
-  // Evolution check: must have exact change in cloud (no overpaying)
+  // Evolution check. Cheap gate first: you must have at least `needed` in the cloud.
+  // Exact-change (subset-sum) is only enforced for small coin-tier amounts — for large bill
+  // amounts we just require enough value (exact matching there is both unrealistic and can be
+  // very expensive to compute every frame).
   const total = playerTotalValue();
   const activeDenoms = AD();
   if (player.denomIdx < activeDenoms.length - 1) {
     const needed = activeDenoms[player.denomIdx].evolveAt - activeDenoms[player.denomIdx].value;
-    if (needed <= 0 || canMakeExact(player.cloud, needed)) {
-      if (needed > 0) spendExact(player.cloud, needed);
+    const cloudVal = cloudValue(player.cloud);
+    if (needed <= 0) {
       player.denomIdx++;
       triggerEvolution(player.denomIdx);
+    } else if (cloudVal >= needed) {
+      const EXACT_MAX = 100; // enforce exact change only up to the $1 tier (coins)
+      if (needed <= EXACT_MAX) {
+        if (canMakeExact(player.cloud, needed)) {
+          spendExact(player.cloud, needed);
+          player.denomIdx++;
+          triggerEvolution(player.denomIdx);
+        }
+      } else {
+        spendCloudCoins(needed);
+        player.denomIdx++;
+        triggerEvolution(player.denomIdx);
+      }
     }
   }
 
@@ -2154,16 +2171,20 @@ function updateHUD() {
   const dashStr = dashActive ? ' ⚡ SPEEDING' : '';
   if (cloudEl) cloudEl.textContent = '$' + (cv / 100).toFixed(2) + ' (' + player.cloud.length + ' coins)' + dashStr;
 
-  // Leaderboard
-  const all = [{ name: 'YOU', denomIdx: player.denomIdx, value: total },
-    ...bots.map((b, i) => ({ name: `Bot ${i+1}`, denomIdx: b.denomIdx, value: b.value }))];
-  all.sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
-  const lb = document.getElementById('hud-leaderboard-list');
-  lb.innerHTML = all.slice(0, 5).map((e, i) => {
-    const d2 = e.name === 'YOU' ? AD()[e.denomIdx] : DENOMINATIONS[e.denomIdx];
-    const isYou = e.name === 'YOU';
-    return `<li style="${isYou ? 'color:#ffd700;font-weight:bold;' : ''}">${i+1}. ${d2.emoji} ${d2.name}${isYou ? ' (You)' : ''}</li>`;
-  }).join('');
+  // Leaderboard — throttled to ~4x/sec (sorting + DOM rebuild is wasteful every frame)
+  const nowMs = Date.now();
+  if (nowMs - (updateHUD._lbT || 0) > 250) {
+    updateHUD._lbT = nowMs;
+    const all = [{ name: 'YOU', denomIdx: player.denomIdx, value: total },
+      ...bots.map((b, i) => ({ name: `Bot ${i+1}`, denomIdx: b.denomIdx, value: b.value }))];
+    all.sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
+    const lb = document.getElementById('hud-leaderboard-list');
+    lb.innerHTML = all.slice(0, 5).map((e, i) => {
+      const d2 = e.name === 'YOU' ? AD()[e.denomIdx] : DENOMINATIONS[e.denomIdx];
+      const isYou = e.name === 'YOU';
+      return `<li style="${isYou ? 'color:#ffd700;font-weight:bold;' : ''}">${i+1}. ${d2.emoji} ${d2.name}${isYou ? ' (You)' : ''}</li>`;
+    }).join('');
+  }
 }
 
 // ===================== UPGRADES SCREEN =====================
