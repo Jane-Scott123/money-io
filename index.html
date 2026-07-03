@@ -179,7 +179,7 @@ let WORLD_W = 3000;
 let WORLD_H = 2400;
 const BASE_WORLD_W = 3000;
 const BASE_WORLD_H = 2400;
-const SAFE_ZONE = { x: WORLD_W - 220, y: WORLD_H - 200, w: 200, h: 180 };
+const SAFE_ZONE = { x: WORLD_W - 400, y: WORLD_H - 360, w: 380, h: 340 };
 const LOOSE_MONEY_COUNT = 300;
 const BOT_COUNT = 18;
 const MINIMAP_SCALE = 100 / WORLD_W;
@@ -194,15 +194,15 @@ const BASE_SPEEDS = [210, 200, 195, 185, 175, 160, 148, 138, 125, 112, 100, 90, 
 // ===================== UPGRADE DEFINITIONS =====================
 // costs are in cents (matching the game's value unit)
 const UPGRADE_DEFS = [
-  { id: 'speed',    name: 'Move Speed',        desc: '+5% speed per level',                        max: 10, costs: [8,20,40,70,110,160,220,300,400,550] },
-  { id: 'radius',   name: 'Eat Radius',        desc: '+20% eat range per level (visible ring)',    max: 5,  costs: [25,80,200,500,1200] },
-  { id: 'magnet',   name: 'Magnetism',         desc: 'Pull loose money ≤ your size toward you',   max: 8,  costs: [15,40,80,140,220,340,500,720] },
-  { id: 'armor',    name: 'Armor',             desc: 'Survive hits from larger players',           max: 5,  costs: [50,120,250,500,1000] },
-  { id: 'bait',     name: 'Counterfeit Bait',  desc: 'Q: drop decoy — eaters get downgraded',     max: 5,  costs: [40,100,220,500,1100] },
-  { id: 'ghost',    name: 'Ghost Summon',      desc: 'Send the $10K ghost after a target (one-use per summon)', max: 3, costs: [500,2000,8000] },
-  { id: 'expand',   name: 'Expand Board',      desc: 'Grow the world — more room, more money',    max: 3,  costs: [300,1200,5000] },
-  { id: 'moneybomb',name: 'Money Bomb',        desc: 'Explode cash everywhere — very expensive',  max: 1,  costs: [50000] },
-  { id: 'minions',  name: 'Money Minions',    desc: 'R: launch a minion that collects money and returns', max: 5, costs: [800,2000,5000,12000,30000] },
+  { id: 'speed',    name: 'Move Speed',        desc: 'Passive: +5% speed per level',               max: 10, costs: [8,20,40,70,110,160,220,300,400,550] },
+  { id: 'radius',   name: 'Eat Radius',        desc: 'Passive: +20% eat range per level (green ring)', max: 5, costs: [25,80,200,500,1200] },
+  { id: 'magnet',   name: 'Magnetism',         desc: 'Passive: pull loose money ≤ your size toward you', max: 8, costs: [15,40,80,140,220,340,500,720] },
+  { id: 'armor',    name: 'Armor',             desc: 'Passive: survive hits from larger players',  max: 5,  costs: [50,120,250,500,1000] },
+  { id: 'bait',     name: 'Counterfeit Bait',  desc: 'Press Q in-game to drop a decoy — eaters get downgraded', max: 5, costs: [40,100,220,500,1100] },
+  { id: 'ghost',    name: 'Ghost Summon',      desc: 'Unlock, then use the Summon button here to send the ghost at the richest bot', max: 3, costs: [500,2000,8000] },
+  { id: 'expand',   name: 'Expand Board',      desc: 'Instant: click to grow the world — more room & money', max: 3, costs: [300,1200,5000] },
+  { id: 'moneybomb',name: 'Money Bomb',        desc: 'Instant: click to explode cash across the map (very expensive)', max: 1, costs: [50000] },
+  { id: 'minions',  name: 'Money Minions',    desc: 'Press R in-game to launch a minion that collects money & returns it', max: 5, costs: [800,2000,5000,12000,30000] },
 ];
 
 // ===================== STATE =====================
@@ -350,32 +350,52 @@ function addToCloud(wx, wy, denomIdx, value) {
     denomIdx, value,
     angle,
     orbitDist,
+    radialFactor: 0.35 + Math.random() * 0.65, // fills the disc (cloud) instead of a ring
     orbitSpeed: (0.8 + Math.random() * 0.8) * (Math.random() < 0.5 ? 1 : -1),
     flyIn: 1.0,       // 1 = still flying in, 0 = orbiting
   });
 }
 
-// Check if exact change for targetCents can be made from cloud (greedy, works for standard coin sets)
-function canMakeExact(cloud, targetCents) {
-  const sorted = [...cloud].sort((a, b) => b.value - a.value);
-  let remaining = targetCents;
-  for (const c of sorted) {
-    if (c.value <= remaining) remaining -= c.value;
+// Find how many of each denomination to use to make EXACTLY targetCents from the cloud.
+// Returns a map {denomValue: countToUse} or null if impossible. Uses DFS over the few
+// distinct denominations present (fast: at most ~14 distinct values).
+function findExactChange(cloud, targetCents) {
+  // Count coins by value, largest first
+  const counts = {};
+  cloud.forEach(c => { counts[c.value] = (counts[c.value] || 0) + 1; });
+  const values = Object.keys(counts).map(Number).sort((a, b) => b - a);
+
+  const result = {};
+  function dfs(idx, remaining) {
     if (remaining === 0) return true;
+    if (idx >= values.length || remaining < 0) return false;
+    const v = values[idx];
+    const maxUse = Math.min(counts[v], Math.floor(remaining / v));
+    // Try using the most of this denom first (down to 0)
+    for (let use = maxUse; use >= 0; use--) {
+      result[v] = use;
+      if (dfs(idx + 1, remaining - use * v)) return true;
+    }
+    result[v] = 0;
+    return false;
   }
-  return remaining === 0;
+  return dfs(0, targetCents) ? { ...result } : null;
+}
+
+function canMakeExact(cloud, targetCents) {
+  return findExactChange(cloud, targetCents) !== null;
 }
 
 // Remove cloud coins summing to exactly targetCents; mutates player.cloud in place
 function spendExact(cloud, targetCents) {
-  const sorted = [...cloud].sort((a, b) => b.value - a.value);
-  const toRemove = new Set();
-  let remaining = targetCents;
-  for (const c of sorted) {
-    if (c.value <= remaining) { toRemove.add(c); remaining -= c.value; }
-    if (remaining === 0) break;
-  }
-  player.cloud = player.cloud.filter(c => !toRemove.has(c));
+  const plan = findExactChange(cloud, targetCents);
+  if (!plan) return false;
+  const need = { ...plan };
+  player.cloud = player.cloud.filter(c => {
+    if (need[c.value] > 0) { need[c.value]--; return false; }
+    return true;
+  });
+  return true;
 }
 
 // Remove cloud coins totalling at least `costCents`; returns true if successful (used for upgrades)
@@ -729,6 +749,27 @@ function update(dt) {
       }
     }
 
+    // Bot eats other bots (bigger denom eats smaller); skip bots in safe zones
+    for (let j = 0; j < bots.length; j++) {
+      const other = bots[j];
+      if (other === bot || other.stunTimer > 0) continue;
+      if (bot.denomIdx <= other.denomIdx) continue;
+      if (inSafeZone(other.x, other.y)) continue;
+      const dx = bot.x - other.x, dy = bot.y - other.y;
+      const r = denomRadius(bot.denomIdx) * 1.1 + denomRadius(other.denomIdx) * 0.5;
+      if (dx*dx + dy*dy < r*r) {
+        bot.value += other.value * 0.7;
+        other.cloudCoins.forEach(cc => {
+          if (bot.cloudCoins.length < 18) bot.cloudCoins.push({
+            value: cc.value, denomIdx: cc.denomIdx, angle: Math.random()*Math.PI*2,
+            orbitSpeed: (0.5+Math.random()*0.9)*(Math.random()<0.5?1:-1),
+          });
+        });
+        spawnParticles(other.x, other.y, DENOMINATIONS[other.denomIdx].color, 10);
+        Object.assign(other, createBot(0));
+      }
+    }
+
     // Cloud stealing: entities in close proximity steal coins across clouds (disabled in safe zones)
     {
       const stealDx = player.x - bot.x, stealDy = player.y - bot.y;
@@ -941,8 +982,9 @@ function updateCloud(dt) {
   const maxOrbit = pr + 68; // hard cap — coins get denser, not further
   player.cloud.forEach(c => {
     c.angle += c.orbitSpeed * dt;
-    const idx = player.cloud.indexOf(c);
-    c.orbitDist = Math.min(maxOrbit, pr + 22 + idx * 3.5);
+    if (c.radialFactor === undefined) c.radialFactor = 0.35 + Math.random() * 0.65;
+    // Distribute coins across the whole disc (cloud), not just the outer ring
+    c.orbitDist = pr + 14 + c.radialFactor * (maxOrbit - pr - 14);
     // flyIn: animate from spawn position toward orbit
     if (c.flyIn > 0) {
       c.flyIn = Math.max(0, c.flyIn - dt * 3);
@@ -999,6 +1041,15 @@ function updatePlayerMovement(dt) {
 }
 
 function updateBot(bot, dt) {
+  // Always spin the cloud coins, even when stunned or a bounty hunter (which return early)
+  if (bot.cloudCoins) {
+    bot.cloudCoins.forEach(cc => {
+      if (cc.orbitSpeed === undefined) cc.orbitSpeed = (0.5 + Math.random()*0.9) * (Math.random()<0.5?1:-1);
+      if (cc.angle === undefined) cc.angle = Math.random() * Math.PI * 2;
+      cc.angle += cc.orbitSpeed * dt;
+    });
+  }
+
   if (bot.stunTimer > 0) return;
 
   bot.chasingPlayer = false;
@@ -1143,18 +1194,15 @@ function updateBot(bot, dt) {
 
   // Passive value growth so bots evolve over time even without eating
   bot.value += DENOMINATIONS[bot.denomIdx].value * 0.08 * dt;
-
-  // Update cloud coin orbit angles
-  if (bot.cloudCoins) {
-    bot.cloudCoins.forEach(cc => { cc.angle += cc.orbitSpeed * dt; });
-  }
 }
 
 function drawBotCloud(bot) {
   if (!bot.cloudCoins || bot.cloudCoins.length === 0) return;
   const br = denomRadius(bot.denomIdx);
-  const orbitR = Math.min(br + 16, br + 10 + bot.cloudCoins.length * 0.5);
+  const maxR = br + 26;
   bot.cloudCoins.forEach((cc, i) => {
+    if (cc.radialFactor === undefined) cc.radialFactor = 0.35 + Math.random() * 0.65;
+    const orbitR = br + 8 + cc.radialFactor * (maxR - br - 8);
     const cx = bot.x + Math.cos(cc.angle) * orbitR;
     const cy = bot.y + Math.sin(cc.angle) * orbitR;
     const r = 4 + cc.denomIdx * 0.8;
@@ -1928,15 +1976,6 @@ function drawEntity(e, isPlayer = false) {
     ctx.stroke();
   }
 
-  // Boost indicator
-  if (isPlayer && mintBoostActive > 0) {
-    ctx.beginPath();
-    ctx.arc(0, 0, r + 10, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(0,200,255,0.6)';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-  }
-
   // Eat radius ring (visible when upgraded)
   if (isPlayer && getUpgradeLevel('radius') > 0) {
     const eatR = playerEatRadius();
@@ -2349,16 +2388,6 @@ window.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     const t = e.touches[0];
     touchTarget = screenToWorld(t.clientX, t.clientY);
-    const now = Date.now();
-    if (now - (canvas._lastTap || 0) < 300 && gameRunning && mintBoostCooldown <= 0) {
-      const boostLv = getUpgradeLevel('boost');
-      if (boostLv > 0) {
-        mintBoostActive = 1.5 + boostLv * 0.3;
-        mintBoostCooldown = 10;
-        playTone(880, 0.15, 'square', 0.15);
-      }
-    }
-    canvas._lastTap = now;
   }, { passive: false });
 
   canvas.addEventListener('touchmove', e => {
