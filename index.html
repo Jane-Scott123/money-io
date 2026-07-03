@@ -1259,8 +1259,9 @@ function updateGhost(dt) {
   ghost.x = Math.max(60, Math.min(WORLD_W - 60, ghost.x));
   ghost.y = Math.max(60, Math.min(WORLD_H - 60, ghost.y));
 
-  // Ghost eats player — respects all safe zones
-  if (!inSafeZone(player.x, player.y) && !debtSafeZones.some(dz => { const dx=player.x-dz.x,dy=player.y-dz.y; return dx*dx+dy*dy<dz.r*dz.r; })) {
+  // Ghost eats player — respects all safe zones; can't eat a max-denomination player
+  const playerAtMax = player.denomIdx >= AD().length - 1;
+  if (!playerAtMax && !inSafeZone(player.x, player.y) && !debtSafeZones.some(dz => { const dx=player.x-dz.x,dy=player.y-dz.y; return dx*dx+dy*dy<dz.r*dz.r; })) {
     const pdx = ghost.x - player.x, pdy = ghost.y - player.y;
     const gr = denomRadius(ghost.denomIdx);
     if (pdx*pdx + pdy*pdy < (gr + playerRadius()) * (gr + playerRadius())) {
@@ -1522,57 +1523,55 @@ function createGemMoney() {
 }
 
 // ===================== MINION UPDATE =====================
+// Minions are permanent companions. Each collects loose money until full, returns to
+// deposit into your cloud, then heads back out. They never die. You may have at most
+// as many active as your Money Minions upgrade level (the yellow level pips).
 function updateMinions(dt) {
-  const minionLv = getUpgradeLevel('minions');
-  if (minionLv <= 0 || minions.length === 0) return;
-  for (let i = minions.length - 1; i >= 0; i--) {
+  if (minions.length === 0) return;
+  const SPEED = 240;
+  for (let i = 0; i < minions.length; i++) {
     const m = minions[i];
-    m.life -= dt;
-    if (m.life <= 0) {
-      // Return to player — add carried value to cloud
-      if (m.carrying > 0) addToCloud(player.x, player.y, 0, m.carrying);
-      spawnParticles(m.x, m.y, '#ffd700', 6);
-      minions.splice(i, 1);
-      continue;
-    }
-    // Return home if carrying enough or low life
-    if (m.carrying > 0 && (m.life < 3 || m.carrying >= m.capacity)) {
+    if (m.carrying === undefined) m.carrying = 0;
+    if (m.capacity === undefined) m.capacity = 50;
+
+    if (m.mode === 'return' || m.carrying >= m.capacity) {
+      m.mode = 'return';
       const dx = player.x - m.x, dy = player.y - m.y;
-      const d = Math.sqrt(dx*dx + dy*dy);
-      if (d < 20) {
-        addToCloud(player.x, player.y, 0, m.carrying);
-        playChing(0);
-        minions.splice(i, 1);
-        continue;
+      const d = Math.sqrt(dx*dx + dy*dy) || 1;
+      if (d < playerRadius() + 14) {
+        // Deposit everything into the cloud, then go back out (do NOT die)
+        if (m.carrying > 0) { addToCloud(player.x, player.y, 0, m.carrying); playChing(0); }
+        m.carrying = 0;
+        m.mode = 'hunt';
+      } else {
+        m.x += (dx/d) * SPEED * dt;
+        m.y += (dy/d) * SPEED * dt;
       }
-      m.x += (dx/d) * 200 * dt;
-      m.y += (dy/d) * 200 * dt;
       continue;
     }
-    // Hunt nearest loose money ≤ player's denomination
-    let best = null, bestDist = 99999;
+
+    // Hunt: seek nearest loose money ≤ player's denomination (no range limit — can go far)
+    let best = null, bestDist = Infinity;
     looseMoney.forEach(lm => {
       if (lm.denomIdx > player.denomIdx) return;
       const dx = lm.x - m.x, dy = lm.y - m.y;
-      const d = Math.sqrt(dx*dx + dy*dy);
+      const d = dx*dx + dy*dy;
       if (d < bestDist) { bestDist = d; best = lm; }
     });
     if (best) {
       const dx = best.x - m.x, dy = best.y - m.y;
-      const d = Math.sqrt(dx*dx + dy*dy);
-      m.x += (dx/d) * 180 * dt;
-      m.y += (dy/d) * 180 * dt;
-      if (d < 14) {
+      const d = Math.sqrt(dx*dx + dy*dy) || 1;
+      m.x += (dx/d) * SPEED * dt;
+      m.y += (dy/d) * SPEED * dt;
+      if (d < 16) {
         m.carrying += best.value;
         looseMoney = looseMoney.filter(lm => lm !== best);
       }
     } else {
-      // Wander
-      m.wx = (m.wx || player.x) + (Math.random()-0.5)*8;
-      m.wy = (m.wy || player.y) + (Math.random()-0.5)*8;
-      const dx = m.wx - m.x, dy = m.wy - m.y;
-      const d = Math.sqrt(dx*dx+dy*dy);
-      if (d > 1) { m.x += (dx/d)*120*dt; m.y += (dy/d)*120*dt; }
+      // Nothing to collect — drift near player
+      const dx = player.x - m.x, dy = player.y - m.y;
+      const d = Math.sqrt(dx*dx+dy*dy) || 1;
+      if (d > 120) { m.x += (dx/d)*SPEED*dt; m.y += (dy/d)*SPEED*dt; }
     }
     m.x = Math.max(20, Math.min(WORLD_W-20, m.x));
     m.y = Math.max(20, Math.min(WORLD_H-20, m.y));
@@ -1582,9 +1581,13 @@ function updateMinions(dt) {
 function launchMinion() {
   const lv = getUpgradeLevel('minions');
   if (lv <= 0) return;
-  const capacity = lv * 50;
-  const life = 12 + lv * 4;
-  minions.push({ x: player.x, y: player.y, carrying: 0, capacity, life, wx: player.x, wy: player.y });
+  // Cap active minions at the upgrade level (yellow pips)
+  if (minions.length >= lv) {
+    playTone(220, 0.12, 'sine', 0.1); // "already at max" tone
+    return;
+  }
+  const capacity = 50 + lv * 50;
+  minions.push({ x: player.x, y: player.y, carrying: 0, capacity, mode: 'hunt' });
   playTone(880, 0.1, 'triangle', 0.12);
 }
 
