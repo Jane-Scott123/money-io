@@ -709,13 +709,22 @@ function update(dt) {
       gameOver(true); // Won gem world!
       return;
     } else if (!eatGhostPrompted) {
-      // Just became a $10K — tell the player to eat the ghost to reach the Gem World
+      // Just became a $10K — tell the player to eat the ghost to open the portal
       eatGhostPrompted = true;
       const evo = document.getElementById('evo-text');
       evo.style.display = 'block';
       evo.innerHTML = '<div class="evo-label" style="color:#aa44ff;">👻 EAT THE GHOST!</div>';
-      setTimeout(() => { evo.style.display = 'none'; }, 3500);
+      setTimeout(() => { evo.style.display = 'none'; }, 6500);
       playTone(110, 1.2, 'sawtooth', 0.22);
+    }
+  }
+
+  // Portal (opened after eating the ghost): walk into it to get the option to enter the Gem World
+  if (portal && portal.active) {
+    const pdx = player.x - portal.x, pdy = player.y - portal.y;
+    if (pdx*pdx + pdy*pdy < portal.r * portal.r) {
+      openPortalScreen();
+      return;
     }
   }
 
@@ -1217,8 +1226,28 @@ function drawBotCloud(bot) {
 
 function updateGhost(dt) {
   if (ghost.stunTimer > 0) { ghost.stunTimer -= dt; return; }
+
+  // Flee from anything bigger than the ghost (e.g. a $10K player) — check every frame
+  let fleeFrom = null, fleeDist = Infinity;
+  if (player.denomIdx > ghost.denomIdx) {
+    const dx = player.x - ghost.x, dy = player.y - ghost.y;
+    const d = Math.sqrt(dx*dx + dy*dy);
+    if (d < 520 && d < fleeDist) { fleeDist = d; fleeFrom = { x: player.x, y: player.y }; }
+  }
+  bots.forEach(b => {
+    if (b.denomIdx <= ghost.denomIdx) return;
+    const dx = b.x - ghost.x, dy = b.y - ghost.y;
+    const d = Math.sqrt(dx*dx + dy*dy);
+    if (d < 400 && d < fleeDist) { fleeDist = d; fleeFrom = { x: b.x, y: b.y }; }
+  });
+
   ghost.wanderTimer -= dt;
-  if (ghost.wanderTimer <= 0) {
+  if (fleeFrom) {
+    // Run away — target a point directly opposite the threat
+    ghost.targetX = ghost.x + (ghost.x - fleeFrom.x) * 3;
+    ghost.targetY = ghost.y + (ghost.y - fleeFrom.y) * 3;
+    ghost.wanderTimer = 0.3;
+  } else if (ghost.wanderTimer <= 0) {
     if (ghostSummonTarget && bots.includes(ghostSummonTarget)) {
       // Summoned — beeline for target bot
       ghost.targetX = ghostSummonTarget.x + (Math.random()-0.5)*40;
@@ -1226,26 +1255,31 @@ function updateGhost(dt) {
       ghost.wanderTimer = 0.5;
     } else {
       ghostSummonTarget = null;
-      // Default: target the highest-value entity on the board
-      let allTargets = [{ x: player.x, y: player.y, val: playerTotalValue() },
-        ...bots.map(b => ({ x: b.x, y: b.y, val: b.value }))];
+      // Default: target the highest-value entity SMALLER than the ghost
+      let allTargets = [{ x: player.x, y: player.y, val: playerTotalValue(), idx: player.denomIdx },
+        ...bots.map(b => ({ x: b.x, y: b.y, val: b.value, idx: b.denomIdx }))]
+        .filter(t => t.idx < ghost.denomIdx);
       allTargets.sort((a, b) => b.val - a.val);
-      const top = allTargets[0];
-      ghost.targetX = top.x + (Math.random() - 0.5) * 120;
-      ghost.targetY = top.y + (Math.random() - 0.5) * 120;
+      if (allTargets.length) {
+        const top = allTargets[0];
+        ghost.targetX = top.x + (Math.random() - 0.5) * 120;
+        ghost.targetY = top.y + (Math.random() - 0.5) * 120;
+      }
       ghost.wanderTimer = 1.5 + Math.random() * 2;
     }
   }
+  // Move faster when fleeing
+  const gspd = fleeFrom ? 150 : 95;
   const gdx = ghost.targetX - ghost.x, gdy = ghost.targetY - ghost.y;
   const gdist = Math.sqrt(gdx*gdx + gdy*gdy);
   if (gdist > 10) {
-    ghost.x += (gdx / gdist) * 95 * dt;
-    ghost.y += (gdy / gdist) * 95 * dt;
+    ghost.x += (gdx / gdist) * gspd * dt;
+    ghost.y += (gdy / gdist) * gspd * dt;
   }
   ghost.x = Math.max(60, Math.min(WORLD_W - 60, ghost.x));
   ghost.y = Math.max(60, Math.min(WORLD_H - 60, ghost.y));
 
-  // Player eats the ghost once bigger than it (the $5K ghost) → opens the way to the Gem World
+  // Player eats the ghost once bigger than it (the $5K ghost) → a portal opens on the wall
   {
     const pdx = ghost.x - player.x, pdy = ghost.y - player.y;
     const gr = denomRadius(ghost.denomIdx);
@@ -1253,7 +1287,8 @@ function updateGhost(dt) {
         pdx*pdx + pdy*pdy < (gr + playerRadius()) * (gr + playerRadius())) {
       spawnParticles(ghost.x, ghost.y, '#ffd700', 30);
       playEatPlayer(player.denomIdx);
-      openPortalScreen();
+      ghost = null;       // ghost is consumed
+      spawnPortal();      // portal opens on a wall — walk into it to get the option to enter
       return;
     }
   }
