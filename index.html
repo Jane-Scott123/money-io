@@ -246,6 +246,7 @@ let inGemWorld = false;       // true when player is in portal/gem world
 let activeDenomsRef = null;   // points to DENOMINATIONS or GEM_DENOMINATIONS
 let portal = null;            // { x, y, r, active } — the dimensional rift
 let minions = [];             // money minions sent out by upgrade
+let eatGhostPrompted = false; // whether the "EAT THE GHOST" prompt has shown this match
 
 // ===================== AUDIO =====================
 function getAudioCtx() {
@@ -474,6 +475,7 @@ function startGame() {
   WORLD_H = BASE_WORLD_H;
   inGemWorld = false;
   activeDenomsRef = DENOMINATIONS;
+  eatGhostPrompted = false;
   positionSafeZone();
 
   player = createPlayer();
@@ -702,22 +704,18 @@ function update(dt) {
   }
 
   // Max denom reached
-  if (player.denomIdx >= activeDenoms.length - 1 && total >= activeDenoms[activeDenoms.length - 1].evolveAt) {
-    if (!inGemWorld) {
-      // Offer portal to gem world
-      spawnPortal();
-    } else {
+  if (player.denomIdx >= activeDenoms.length - 1) {
+    if (inGemWorld) {
       gameOver(true); // Won gem world!
-    }
-    return;
-  }
-
-  // Portal: player walks into it
-  if (portal && portal.active) {
-    const pdx = player.x - portal.x, pdy = player.y - portal.y;
-    if (pdx*pdx + pdy*pdy < portal.r * portal.r) {
-      openPortalScreen();
       return;
+    } else if (!eatGhostPrompted) {
+      // Just became a $10K — tell the player to eat the ghost to reach the Gem World
+      eatGhostPrompted = true;
+      const evo = document.getElementById('evo-text');
+      evo.style.display = 'block';
+      evo.innerHTML = '<div class="evo-label" style="color:#aa44ff;">👻 EAT THE GHOST!</div>';
+      setTimeout(() => { evo.style.display = 'none'; }, 3500);
+      playTone(110, 1.2, 'sawtooth', 0.22);
     }
   }
 
@@ -1260,11 +1258,21 @@ function updateGhost(dt) {
   ghost.x = Math.max(60, Math.min(WORLD_W - 60, ghost.x));
   ghost.y = Math.max(60, Math.min(WORLD_H - 60, ghost.y));
 
-  // Ghost eats player — respects all safe zones; can't eat you once you're a $5K bill or bigger
-  // (top two money tiers), or the top gem tier.
-  const ghostImmuneIdx = inGemWorld ? GEM_DENOMINATIONS.length - 1 : DENOMINATIONS.length - 2;
-  const playerSafeFromGhost = player.denomIdx >= ghostImmuneIdx;
-  if (!playerSafeFromGhost && !inSafeZone(player.x, player.y) && !debtSafeZones.some(dz => { const dx=player.x-dz.x,dy=player.y-dz.y; return dx*dx+dy*dy<dz.r*dz.r; })) {
+  // Player eats the ghost once bigger than it (the $5K ghost) → opens the way to the Gem World
+  {
+    const pdx = ghost.x - player.x, pdy = ghost.y - player.y;
+    const gr = denomRadius(ghost.denomIdx);
+    if (player.denomIdx > ghost.denomIdx &&
+        pdx*pdx + pdy*pdy < (gr + playerRadius()) * (gr + playerRadius())) {
+      spawnParticles(ghost.x, ghost.y, '#ffd700', 30);
+      playEatPlayer(player.denomIdx);
+      openPortalScreen();
+      return;
+    }
+  }
+
+  // Ghost eats player — only if the ghost is strictly bigger than the player; respects safe zones
+  if (ghost.denomIdx > player.denomIdx && !inSafeZone(player.x, player.y) && !debtSafeZones.some(dz => { const dx=player.x-dz.x,dy=player.y-dz.y; return dx*dx+dy*dy<dz.r*dz.r; })) {
     const pdx = ghost.x - player.x, pdy = ghost.y - player.y;
     const gr = denomRadius(ghost.denomIdx);
     if (pdx*pdx + pdy*pdy < (gr + playerRadius()) * (gr + playerRadius())) {
@@ -1299,16 +1307,15 @@ function updateGhost(dt) {
     }
   }
 
-  // Ghost eats bots it touches (respawns them as small bots)
+  // Ghost eats only bots smaller than it (like a normal player would)
   bots.forEach(bot => {
     if (bot.stunTimer > 0) return;
+    if (bot.denomIdx >= ghost.denomIdx) return;
     const dx = ghost.x - bot.x, dy = ghost.y - bot.y;
     const gr = denomRadius(ghost.denomIdx);
     if (dx*dx + dy*dy < (gr + denomRadius(bot.denomIdx)) * (gr + denomRadius(bot.denomIdx))) {
       spawnParticles(bot.x, bot.y, DENOMINATIONS[bot.denomIdx].color, 10);
-      const wasHunter = bot.isBountyHunter;
       Object.assign(bot, createBot());
-      bot.isBountyHunter = wasHunter;
     }
   });
 }
@@ -1515,6 +1522,7 @@ function enterGemWorld() {
   player.denomIdx = 0;
   player.cloud = [];
   portal = null;
+  ghost = null; // no ghost in the gem world
   minions = [];
   matchUpgrades = {};
   // Repopulate world with gem-flavored loose money (reuse same positions)
@@ -1559,12 +1567,12 @@ function updateMinions(dt) {
     if (m.carrying === undefined) m.carrying = 0;
     if (m.capacity === undefined) m.capacity = 50;
 
-    if (m.mode === 'return' || m.carrying >= m.capacity) {
+    if (m.mode === 'return' || m.carrying > 0) {
       m.mode = 'return';
       const dx = player.x - m.x, dy = player.y - m.y;
       const d = Math.sqrt(dx*dx + dy*dy) || 1;
       if (d < playerRadius() + 14) {
-        // Deposit everything into the cloud, then go back out (do NOT die)
+        // Deposit the single item into the cloud, then go back out for one more (do NOT die)
         if (m.carrying > 0) { addToCloud(player.x, player.y, 0, m.carrying); playChing(0); }
         m.carrying = 0;
         m.mode = 'hunt';
@@ -1589,8 +1597,10 @@ function updateMinions(dt) {
       m.x += (dx/d) * SPEED * dt;
       m.y += (dy/d) * SPEED * dt;
       if (d < 16) {
-        m.carrying += best.value;
+        // Grab exactly ONE thing, then head back
+        m.carrying = best.value;
         looseMoney = looseMoney.filter(lm => lm !== best);
+        m.mode = 'return';
       }
     } else {
       // Nothing to collect — drift near player
@@ -1787,8 +1797,7 @@ function render() {
 
   ctx.restore();
 
-  // Screen-space overlays
-  drawWantedIndicator();
+  // Screen-space overlays (WANTED indicator removed)
 
   // Minimap
   drawMinimap();
