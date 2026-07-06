@@ -970,19 +970,6 @@ function update(dt) {
     } else { dz.drainTimer = Math.min(dz.drainTimer + dt * 0.5, 0.3); }
   });
 
-  // Collect WANTED bots (larger bots chasing player, or bounty hunters nearby)
-  wantedBots = bots.filter(b => {
-    if (b.isBountyHunter) {
-      const dx = b.x - player.x, dy = b.y - player.y;
-      return Math.sqrt(dx*dx + dy*dy) < 500;
-    }
-    return b.chasingPlayer && b.denomIdx > player.denomIdx;
-  });
-  if (ghost) {
-    const gdx = ghost.x - player.x, gdy = ghost.y - player.y;
-    if (Math.sqrt(gdx*gdx + gdy*gdy) < 450) wantedBots = [...wantedBots, ghost];
-  }
-
   // Escalating heartbeat: plays faster and louder as larger entities close in
   heartbeatTimer -= dt;
   if (heartbeatTimer <= 0) {
@@ -1360,57 +1347,6 @@ function drawGhost() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('👻 GHOST', 0, r + 5);
-  ctx.restore();
-}
-
-function drawWantedIndicator() {
-  if (!wantedBots || wantedBots.length === 0) return;
-  const vw = canvas.width, vh = canvas.height;
-
-  // Find nearest wanted threat
-  let nearest = null, nearestDist = Infinity;
-  wantedBots.forEach(wb => {
-    const dx = wb.x - player.x, dy = wb.y - player.y;
-    const dist = Math.sqrt(dx*dx + dy*dy);
-    if (dist < nearestDist) { nearestDist = dist; nearest = wb; }
-  });
-  if (!nearest) return;
-
-  const dx = nearest.x - player.x, dy = nearest.y - player.y;
-  const angle = Math.atan2(dy, dx);
-  const margin = 55;
-  const cx = vw / 2, cy = vh / 2;
-  const hw = vw / 2 - margin, hh = vh / 2 - margin;
-  const ta = Math.abs(Math.cos(angle)), tb = Math.abs(Math.sin(angle));
-  const t = (ta > 0 && tb > 0) ? Math.min(hw / ta, hh / tb) : (ta > 0 ? hw / ta : hh / tb);
-  const ax = cx + Math.cos(angle) * t, ay = cy + Math.sin(angle) * t;
-
-  const pulse = 0.65 + Math.sin(Date.now() * 0.009) * 0.35;
-  ctx.save();
-  ctx.globalAlpha = pulse;
-
-  // WANTED label above arrow
-  ctx.font = 'bold 12px Arial';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'bottom';
-  ctx.fillStyle = '#ff2222';
-  const lx = ax + Math.cos(angle + Math.PI) * 28;
-  const ly = ay + Math.sin(angle + Math.PI) * 28;
-  ctx.fillText('⚠ WANTED', lx, ly - 4);
-
-  // Arrow pointing at threat
-  ctx.translate(ax, ay);
-  ctx.rotate(angle);
-  ctx.fillStyle = '#ff2222';
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(18, 0);
-  ctx.lineTo(-10, -11);
-  ctx.lineTo(-10, 11);
-  ctx.closePath();
-  ctx.fill(); ctx.stroke();
-
   ctx.restore();
 }
 
