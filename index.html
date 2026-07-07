@@ -166,15 +166,17 @@ const DENOMINATIONS = [
   { name: '$10,000 Bill',symbol: '$10K',emoji: '🏆', value: 1000000, evolveAt: Infinity, color: '#000000', textColor: '#ffd700', radius: 90, isBill: true },
 ];
 
-// Gem world denominations (portal world)
+// Gem world denominations (portal world). Each tier is 10× the previous — you need ten of
+// what you are to evolve. Value is in cents: Bronze $0.01, Silver $0.10, Gold $1, Pearl $10, …
 const GEM_DENOMINATIONS = [
-  { name: 'Bronze',   symbol: 'Br', emoji: '🟤', value: 1,       evolveAt: 8,        color: '#cd7f32', textColor: '#3d1f00', radius: 16, isGem: true },
-  { name: 'Silver',   symbol: 'Ag', emoji: '⚪', value: 8,       evolveAt: 50,       color: '#c0c0c0', textColor: '#333',    radius: 20, isGem: true },
-  { name: 'Gold',     symbol: 'Au', emoji: '🟡', value: 50,      evolveAt: 250,      color: '#ffd700', textColor: '#5a3e00', radius: 25, isGem: true },
-  { name: 'Sapphire', symbol: 'Sa', emoji: '🔵', value: 250,     evolveAt: 1500,     color: '#0f52ba', textColor: '#e8f4fd', radius: 31, isGem: true },
-  { name: 'Ruby',     symbol: 'Rb', emoji: '🔴', value: 1500,    evolveAt: 8000,     color: '#9b111e', textColor: '#ffe4e6', radius: 38, isGem: true },
-  { name: 'Emerald',  symbol: 'Em', emoji: '🟢', value: 8000,    evolveAt: 40000,    color: '#008000', textColor: '#e8ffe8', radius: 46, isGem: true },
-  { name: 'Diamond',  symbol: 'Di', emoji: '💎', value: 40000,   evolveAt: Infinity, color: '#b9f2ff', textColor: '#003344', radius: 55, isGem: true },
+  { name: 'Bronze',   symbol: 'Br', emoji: '🟤', value: 1,        evolveAt: 10,        color: '#cd7f32', textColor: '#3d1f00', radius: 16, isGem: true },
+  { name: 'Silver',   symbol: 'Ag', emoji: '⚪', value: 10,       evolveAt: 100,       color: '#c0c0c0', textColor: '#333',    radius: 19, isGem: true },
+  { name: 'Gold',     symbol: 'Au', emoji: '🟡', value: 100,      evolveAt: 1000,      color: '#ffd700', textColor: '#5a3e00', radius: 23, isGem: true },
+  { name: 'Pearl',    symbol: 'Pl', emoji: '⚪', value: 1000,     evolveAt: 10000,     color: '#f5f0e6', textColor: '#666',    radius: 27, isGem: true },
+  { name: 'Sapphire', symbol: 'Sa', emoji: '🔵', value: 10000,    evolveAt: 100000,    color: '#0f52ba', textColor: '#e8f4fd', radius: 32, isGem: true },
+  { name: 'Ruby',     symbol: 'Rb', emoji: '🔴', value: 100000,   evolveAt: 1000000,   color: '#9b111e', textColor: '#ffe4e6', radius: 38, isGem: true },
+  { name: 'Emerald',  symbol: 'Em', emoji: '🟢', value: 1000000,  evolveAt: 10000000,  color: '#008000', textColor: '#e8ffe8', radius: 46, isGem: true },
+  { name: 'Diamond',  symbol: 'Di', emoji: '💎', value: 10000000, evolveAt: Infinity,  color: '#b9f2ff', textColor: '#003344', radius: 55, isGem: true },
 ];
 
 let WORLD_W = 3000;
@@ -693,8 +695,10 @@ function update(dt) {
       player.denomIdx++;
       triggerEvolution(player.denomIdx);
     } else if (cloudVal >= needed) {
-      const EXACT_MAX = 100; // enforce exact change only up to the $1 tier (coins)
-      if (needed <= EXACT_MAX) {
+      // Gem world: just need ten of what you are (enough value) — no exact-change rule.
+      // Money world: exact change enforced for coin tiers only.
+      const EXACT_MAX = 100;
+      if (!inGemWorld && needed <= EXACT_MAX) {
         if (canMakeExact(player.cloud, needed)) {
           spendExact(player.cloud, needed);
           player.denomIdx++;
@@ -1448,16 +1452,18 @@ function gameOver(win) {
     allEntities.sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
     const rank = allEntities.findIndex(e => e.isPlayer) + 1;
 
-    // All-time best score (localStorage)
+    // All-time best score (localStorage) — separate best per world
+    const bestKey = inGemWorld ? 'moneyio_best_gem' : 'moneyio_best';
     let best = 0;
-    try { best = parseInt(localStorage.getItem('moneyio_best') || '0', 10) || 0; } catch(e) {}
+    try { best = parseInt(localStorage.getItem(bestKey) || '0', 10) || 0; } catch(e) {}
     const isNewBest = total > best;
-    if (isNewBest) { best = total; try { localStorage.setItem('moneyio_best', String(best)); } catch(e) {} }
+    if (isNewBest) { best = total; try { localStorage.setItem(bestKey, String(best)); } catch(e) {} }
     const bestEl = document.getElementById('go-best');
     if (bestEl) {
+      const label = inGemWorld ? 'Gem World Best' : 'All-Time Best';
       bestEl.textContent = isNewBest
-        ? `🏆 NEW BEST! All-Time High: $${(best / 100).toFixed(2)}`
-        : `🏆 All-Time Best: $${(best / 100).toFixed(2)}`;
+        ? `🏆 NEW BEST! ${label}: $${(best / 100).toFixed(2)}`
+        : `🏆 ${label}: $${(best / 100).toFixed(2)}`;
     }
 
     document.getElementById('go-denom').textContent = AD()[player.denomIdx].emoji + ' ' + AD()[player.denomIdx].name;
@@ -1523,12 +1529,15 @@ function stayInMoneyWorld() {
   requestAnimationFrame(gameLoop);
 }
 
+// Rarity thresholds for the 8 gem tiers (Bronze most common → Diamond rarest)
+const GEM_RARITY = [0.34, 0.58, 0.75, 0.87, 0.94, 0.975, 0.993, 1.0];
 function createGemMoney() {
   const x = 80 + Math.random() * (WORLD_W - 160);
   const y = 80 + Math.random() * (WORLD_H - 160);
-  const r = Math.random();
-  const di = r < 0.35 ? 0 : r < 0.6 ? 1 : r < 0.78 ? 2 : r < 0.90 ? 3 : r < 0.96 ? 4 : r < 0.99 ? 5 : 6;
-  return { x, y, denomIdx: di, value: GEM_DENOMINATIONS[di].value, r: 6 + di * 2.5, age: 0, isGem: true };
+  const rr = Math.random();
+  let di = 0;
+  for (let i = 0; i < GEM_RARITY.length; i++) { if (rr < GEM_RARITY[i]) { di = i; break; } }
+  return { x, y, denomIdx: di, value: GEM_DENOMINATIONS[di].value, r: 9 + di * 2.5, age: 0, isGem: true };
 }
 
 // ===================== MINION UPDATE =====================
@@ -1853,6 +1862,19 @@ function drawGem(name, r) {
     const g = ctx.createLinearGradient(0, -h/2, 0, h/2);
     g.addColorStop(0, '#ffd700'); g.addColorStop(1, '#d9a900');
     ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = '#c9a400'; ctx.lineWidth = 1.5; ctx.stroke();
+  } else if (name === 'Pearl') {
+    // Pearl: creamy white sphere with soft iridescent sheen
+    const g = ctx.createRadialGradient(-r*0.3, -r*0.35, r*0.1, 0, 0, r);
+    g.addColorStop(0, '#ffffff'); g.addColorStop(0.5, '#f2ecdd'); g.addColorStop(1, '#ccc4b0');
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2);
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = 'rgba(200,190,170,0.9)'; ctx.lineWidth = 1.5; ctx.stroke();
+    // pinkish/blue iridescent tint patch
+    ctx.beginPath(); ctx.ellipse(r*0.25, r*0.2, r*0.5, r*0.35, 0.5, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(180,200,255,0.18)'; ctx.fill();
+    // bright shine
+    ctx.beginPath(); ctx.ellipse(-r*0.32, -r*0.36, r*0.24, r*0.14, -0.6, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill();
   } else if (name === 'Sapphire') {
     // Round brilliant, blue — octagon body
     const pts = []; for (let i=0;i<8;i++){const a=Math.PI/8+i*Math.PI/4; pts.push([Math.cos(a)*r, Math.sin(a)*r]);}
@@ -1937,9 +1959,21 @@ function drawLooseMoney(lm) {
 function drawCloudCoins() {
   if (!player || !player.cloud) return;
   player.cloud.forEach(c => {
+    const alpha = 0.7 + Math.sin(c.angle * 3 + Date.now()*0.002) * 0.2;
+    // In the gem world, orbiting cloud items are gems, not coins
+    if (inGemWorld) {
+      const gi = Math.min(c.denomIdx, GEM_DENOMINATIONS.length - 1);
+      const gd = GEM_DENOMINATIONS[gi];
+      const gr = 7 + gi * 1.2;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(c.wx, c.wy);
+      drawGem(gd.name, gr);
+      ctx.restore();
+      return;
+    }
     const d = DENOMINATIONS[c.denomIdx];
     const r = 5 + c.denomIdx * 1.5;
-    const alpha = 0.7 + Math.sin(c.angle * 3 + Date.now()*0.002) * 0.2;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(c.wx, c.wy);
@@ -2230,7 +2264,8 @@ function updateHUD() {
     all.sort((a, b) => b.denomIdx - a.denomIdx || b.value - a.value);
     const lb = document.getElementById('hud-leaderboard-list');
     lb.innerHTML = all.slice(0, 5).map((e, i) => {
-      const d2 = e.name === 'YOU' ? AD()[e.denomIdx] : DENOMINATIONS[e.denomIdx];
+      const arr = inGemWorld ? GEM_DENOMINATIONS : DENOMINATIONS;
+      const d2 = arr[Math.min(e.denomIdx, arr.length - 1)];
       const isYou = e.name === 'YOU';
       return `<li style="${isYou ? 'color:#ffd700;font-weight:bold;' : ''}">${i+1}. ${d2.emoji} ${d2.name}${isYou ? ' (You)' : ''}</li>`;
     }).join('');
