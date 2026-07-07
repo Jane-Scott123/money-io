@@ -768,10 +768,17 @@ function update(dt) {
       }
     }
 
-    while (bot.denomIdx < DENOMINATIONS.length - 1 &&
-           bot.value >= DENOMINATIONS[bot.denomIdx].evolveAt) {
+    // Evolve on the current world's ladder; in the gem world keep bots within 2 tiers of the
+    // player so they can't all rush to Diamond while you're still small.
+    const botDenoms = inGemWorld ? GEM_DENOMINATIONS : DENOMINATIONS;
+    const botMaxIdx = inGemWorld
+      ? Math.min(GEM_DENOMINATIONS.length - 1, player.denomIdx + 2)
+      : DENOMINATIONS.length - 1;
+    while (bot.denomIdx < botMaxIdx &&
+           bot.value >= botDenoms[Math.min(bot.denomIdx, botDenoms.length - 1)].evolveAt) {
       bot.denomIdx++;
     }
+    if (bot.denomIdx > botMaxIdx) bot.denomIdx = botMaxIdx;
 
     // Player eats bot → bot's value + cloud go to player
     if (!pFullySafe && player.denomIdx > bot.denomIdx) {
@@ -1195,8 +1202,10 @@ function updateBot(bot, dt) {
   bot.x = Math.max(r, Math.min(WORLD_W - r, bot.x));
   bot.y = Math.max(r, Math.min(WORLD_H - r, bot.y));
 
-  // Passive value growth so bots evolve over time even without eating
-  bot.value += DENOMINATIONS[bot.denomIdx].value * 0.08 * dt;
+  // Passive value growth so bots slowly evolve even without eating (much slower in the gem world)
+  const pgDenoms = inGemWorld ? GEM_DENOMINATIONS : DENOMINATIONS;
+  const pgRate = inGemWorld ? 0.01 : 0.04;
+  bot.value += pgDenoms[Math.min(bot.denomIdx, pgDenoms.length - 1)].value * pgRate * dt;
 }
 
 function drawBotCloud(bot) {
@@ -1824,104 +1833,95 @@ function polyPath(pts) {
   pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
   ctx.closePath();
 }
-// Faceted (brilliant/step) gemstone: outer body, lighter table, radiating facet lines
-function drawFacetedGem(pts, base, tableCol, edge) {
+// Clean faceted gem: gradient body, subtle table facet, soft highlight — no busy lines.
+function drawCutGem(pts, r, bright, dark, edge) {
   polyPath(pts);
-  ctx.fillStyle = base; ctx.fill();
-  ctx.strokeStyle = edge; ctx.lineWidth = 1.5; ctx.stroke();
-  const t = 0.5;
-  const tp = pts.map(p => [p[0]*t, p[1]*t]);
-  // facet lines from outer vertices to table vertices
-  ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let i = 0; i < pts.length; i++) { ctx.moveTo(pts[i][0], pts[i][1]); ctx.lineTo(tp[i][0], tp[i][1]); }
-  ctx.stroke();
-  // table (flat top facet)
-  polyPath(tp);
-  ctx.fillStyle = tableCol; ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1; ctx.stroke();
-}
-// Metal disc/nugget with radial shading
-function drawMetal(r, light, base, dark, squash) {
-  const sy = squash || 1;
-  ctx.save();
-  ctx.scale(1, sy);
-  const g = ctx.createRadialGradient(-r*0.3, -r*0.3, r*0.15, 0, 0, r);
-  g.addColorStop(0, light); g.addColorStop(0.6, base); g.addColorStop(1, dark);
-  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2);
+  const g = ctx.createLinearGradient(-r*0.5, -r, r*0.5, r);
+  g.addColorStop(0, bright); g.addColorStop(1, dark);
   ctx.fillStyle = g; ctx.fill();
-  ctx.strokeStyle = dark; ctx.lineWidth = 2; ctx.stroke();
-  // shine
-  ctx.beginPath(); ctx.ellipse(-r*0.32, -r*0.32, r*0.28, r*0.16, -0.6, 0, Math.PI*2);
-  ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fill();
+  ctx.strokeStyle = edge; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+  // table (flat top) — subtle lighter inset
+  const tp = pts.map(p => [p[0]*0.5, p[1]*0.5]);
+  polyPath(tp);
+  ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fill();
+  // soft highlight in the top-left
+  ctx.save();
+  polyPath(pts); ctx.clip();
+  ctx.beginPath();
+  ctx.ellipse(-r*0.32, -r*0.4, r*0.5, r*0.22, -0.6, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.fill();
   ctx.restore();
+}
+// 3D metal ingot bar
+function drawBar(r, topCol, faceTop, faceBot, edge) {
+  const w = r*2.0, h = r*1.15, tw = w*0.74, topH = r*0.5;
+  polyPath([[-tw/2,-h/2],[tw/2,-h/2],[tw/2-r*0.12,-h/2-topH],[-tw/2+r*0.12,-h/2-topH]]);
+  ctx.fillStyle = topCol; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = 1.5; ctx.lineJoin='round'; ctx.stroke();
+  polyPath([[-tw/2,-h/2],[tw/2,-h/2],[w/2,h/2],[-w/2,h/2]]);
+  const g = ctx.createLinearGradient(0,-h/2,0,h/2);
+  g.addColorStop(0, faceTop); g.addColorStop(1, faceBot);
+  ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = edge; ctx.lineWidth = 1.5; ctx.stroke();
+  // sheen streak
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-w*0.28, -h/2+3); ctx.lineTo(-w*0.1, h/2-3); ctx.stroke();
+}
+// Sphere with radial shine (bronze coin, pearl)
+function drawSphere(r, c0, c1, c2, edge) {
+  const g = ctx.createRadialGradient(-r*0.32, -r*0.34, r*0.1, 0, 0, r);
+  g.addColorStop(0, c0); g.addColorStop(0.55, c1); g.addColorStop(1, c2);
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2);
+  ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = edge; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(-r*0.33,-r*0.36, r*0.26, r*0.15, -0.6, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.fill();
 }
 
 // Draw a gem to look like the real stone. ctx already translated to center.
 function drawGem(name, r) {
   if (name === 'Bronze') {
-    drawMetal(r, '#f0b878', '#cd7f32', '#7a4a1e');
+    drawSphere(r, '#f4c088', '#c17d33', '#7a4a1e', '#5e3714');
   } else if (name === 'Silver') {
-    drawMetal(r, '#ffffff', '#c8c8ce', '#7a7a80');
+    // Silver bar
+    drawBar(r, '#f2f2f6', '#dcdce2', '#9a9aa2', '#7a7a82');
   } else if (name === 'Gold') {
-    // 3D gold bar: front trapezoid + top face
-    const w = r*2.0, h = r*1.15, tw = w*0.74, topH = r*0.5;
-    // top face
-    polyPath([[-tw/2, -h/2], [tw/2, -h/2], [tw/2 - r*0.12, -h/2 - topH], [-tw/2 + r*0.12, -h/2 - topH]]);
-    ctx.fillStyle = '#ffe9a0'; ctx.fill(); ctx.strokeStyle = '#c9a400'; ctx.lineWidth = 1.5; ctx.stroke();
-    // front face
-    polyPath([[-tw/2, -h/2], [tw/2, -h/2], [w/2, h/2], [-w/2, h/2]]);
-    const g = ctx.createLinearGradient(0, -h/2, 0, h/2);
-    g.addColorStop(0, '#ffd700'); g.addColorStop(1, '#d9a900');
-    ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = '#c9a400'; ctx.lineWidth = 1.5; ctx.stroke();
+    // Gold bar
+    drawBar(r, '#ffe9a0', '#ffd23f', '#d99a00', '#b98800');
   } else if (name === 'Pearl') {
-    // Pearl: creamy white sphere with soft iridescent sheen
-    const g = ctx.createRadialGradient(-r*0.3, -r*0.35, r*0.1, 0, 0, r);
-    g.addColorStop(0, '#ffffff'); g.addColorStop(0.5, '#f2ecdd'); g.addColorStop(1, '#ccc4b0');
-    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2);
-    ctx.fillStyle = g; ctx.fill();
-    ctx.strokeStyle = 'rgba(200,190,170,0.9)'; ctx.lineWidth = 1.5; ctx.stroke();
-    // pinkish/blue iridescent tint patch
-    ctx.beginPath(); ctx.ellipse(r*0.25, r*0.2, r*0.5, r*0.35, 0.5, 0, Math.PI*2);
-    ctx.fillStyle = 'rgba(180,200,255,0.18)'; ctx.fill();
-    // bright shine
-    ctx.beginPath(); ctx.ellipse(-r*0.32, -r*0.36, r*0.24, r*0.14, -0.6, 0, Math.PI*2);
-    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fill();
+    drawSphere(r, '#ffffff', '#f4eede', '#d8cdb8', 'rgba(180,170,150,0.9)');
+    ctx.beginPath(); ctx.ellipse(r*0.28, r*0.22, r*0.5, r*0.34, 0.5, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(180,200,255,0.16)'; ctx.fill();
   } else if (name === 'Sapphire') {
-    // Round brilliant, blue — octagon body
-    const pts = []; for (let i=0;i<8;i++){const a=Math.PI/8+i*Math.PI/4; pts.push([Math.cos(a)*r, Math.sin(a)*r]);}
-    drawFacetedGem(pts, '#1f5fd0', '#7fb2ff', 'rgba(180,215,255,0.8)');
+    // Round brilliant, blue — smooth octagon
+    const pts=[]; for(let i=0;i<8;i++){const a=Math.PI/8+i*Math.PI/4; pts.push([Math.cos(a)*r, Math.sin(a)*r]);}
+    drawCutGem(pts, r, '#6fb3ff', '#123f9e', 'rgba(200,225,255,0.85)');
   } else if (name === 'Ruby') {
-    // Cushion cut, red — rounded square (octagon, squarer)
-    const s = r*0.95, c = r*0.5;
-    drawFacetedGem([[-s+c,-s],[s-c,-s],[s,-s+c],[s,s-c],[s-c,s],[-s+c,s],[-s,s-c],[-s,-s+c]],
-      '#b01020', '#ff6b7a', 'rgba(255,190,200,0.8)');
+    // Cushion cut, red
+    const s=r*0.98, c=r*0.5;
+    drawCutGem([[-s+c,-s],[s-c,-s],[s,-s+c],[s,s-c],[s-c,s],[-s+c,s],[-s,s-c],[-s,-s+c]],
+      r, '#ff6b7a', '#8e0d1a', 'rgba(255,205,212,0.85)');
   } else if (name === 'Emerald') {
-    // Emerald (step) cut, green — rectangle with cut corners + concentric steps
-    const px=r*0.75, py=r*0.95, cc=r*0.35;
+    // Emerald (step) cut, green — rectangle with cut corners + a single clean table
+    const px=r*0.72, py=r*0.92, cc=r*0.32;
     const pts=[[-px+cc,-py],[px-cc,-py],[px,-py+cc],[px,py-cc],[px-cc,py],[-px+cc,py],[-px,py-cc],[-px,-py+cc]];
-    polyPath(pts); ctx.fillStyle='#0b7a3b'; ctx.fill(); ctx.strokeStyle='rgba(180,255,210,0.8)'; ctx.lineWidth=1.5; ctx.stroke();
-    // step-cut concentric rectangles
-    ctx.strokeStyle='rgba(255,255,255,0.28)'; ctx.lineWidth=1;
-    for (const s of [0.66, 0.4]) { polyPath(pts.map(p=>[p[0]*s,p[1]*s])); ctx.stroke(); }
-    polyPath(pts.map(p=>[p[0]*0.4,p[1]*0.4])); ctx.fillStyle='#3fbf70'; ctx.fill();
+    polyPath(pts);
+    const g=ctx.createLinearGradient(0,-py,0,py); g.addColorStop(0,'#4fd58a'); g.addColorStop(1,'#065c2b');
+    ctx.fillStyle=g; ctx.fill(); ctx.strokeStyle='rgba(200,255,220,0.85)'; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.stroke();
+    // single inset step (clean look)
+    polyPath(pts.map(p=>[p[0]*0.6,p[1]*0.6]));
+    ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.fill();
   } else if (name === 'Diamond') {
-    // Brilliant cut diamond: crown (table + facets) on top, pavilion point at bottom
-    const tw=r*0.5, cw=r; // table width, crown width
-    const crownY=-r*0.4, tableY=-r*0.72;
-    // pavilion (lower point)
-    polyPath([[-cw,crownY],[cw,crownY],[0,r*1.05]]);
-    ctx.fillStyle='#8fd6ec'; ctx.fill(); ctx.strokeStyle='rgba(220,245,255,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
-    // pavilion facet lines
-    ctx.strokeStyle='rgba(255,255,255,0.3)'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(-cw*0.4,crownY); ctx.lineTo(0,r*1.05); ctx.moveTo(cw*0.4,crownY); ctx.lineTo(0,r*1.05); ctx.stroke();
-    // crown (top band)
-    polyPath([[-tw,tableY],[tw,tableY],[cw,crownY],[-cw,crownY]]);
-    ctx.fillStyle='#bfe9f5'; ctx.fill(); ctx.strokeStyle='rgba(220,245,255,0.9)'; ctx.lineWidth=1.5; ctx.stroke();
+    // Brilliant cut diamond — clean crown + pavilion with a gradient
+    const pts=[[-r*0.55,-r*0.68],[r*0.55,-r*0.68],[r,-r*0.22],[0,r*1.02],[-r,-r*0.22]];
+    polyPath(pts);
+    const g=ctx.createLinearGradient(0,-r,0,r); g.addColorStop(0,'#eafaff'); g.addColorStop(1,'#7fc9e4');
+    ctx.fillStyle=g; ctx.fill(); ctx.strokeStyle='rgba(230,250,255,0.95)'; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.stroke();
     // table
-    polyPath([[-tw,tableY],[tw,tableY],[tw*0.7,crownY*0.9],[-tw*0.7,crownY*0.9]]);
-    ctx.fillStyle='#eafaff'; ctx.fill();
-    ctx.strokeStyle='rgba(255,255,255,0.6)'; ctx.lineWidth=1; ctx.stroke();
+    polyPath([[-r*0.55,-r*0.68],[r*0.55,-r*0.68],[r*0.33,-r*0.28],[-r*0.33,-r*0.28]]);
+    ctx.fillStyle='rgba(255,255,255,0.45)'; ctx.fill();
+    // two subtle crown lines to the point
+    ctx.strokeStyle='rgba(255,255,255,0.3)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(-r*0.33,-r*0.28); ctx.lineTo(0,r*1.02); ctx.moveTo(r*0.33,-r*0.28); ctx.lineTo(0,r*1.02); ctx.stroke();
   } else {
     ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fillStyle='#888'; ctx.fill();
   }
