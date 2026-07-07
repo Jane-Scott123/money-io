@@ -768,17 +768,12 @@ function update(dt) {
       }
     }
 
-    // Evolve on the current world's ladder; in the gem world keep bots within 2 tiers of the
-    // player so they can't all rush to Diamond while you're still small.
+    // Evolve on the current world's ladder (gem world = 10x gem tiers, same as the player)
     const botDenoms = inGemWorld ? GEM_DENOMINATIONS : DENOMINATIONS;
-    const botMaxIdx = inGemWorld
-      ? Math.min(GEM_DENOMINATIONS.length - 1, player.denomIdx + 2)
-      : DENOMINATIONS.length - 1;
-    while (bot.denomIdx < botMaxIdx &&
-           bot.value >= botDenoms[Math.min(bot.denomIdx, botDenoms.length - 1)].evolveAt) {
+    while (bot.denomIdx < botDenoms.length - 1 &&
+           bot.value >= botDenoms[bot.denomIdx].evolveAt) {
       bot.denomIdx++;
     }
-    if (bot.denomIdx > botMaxIdx) bot.denomIdx = botMaxIdx;
 
     // Player eats bot → bot's value + cloud go to player
     if (!pFullySafe && player.denomIdx > bot.denomIdx) {
@@ -1217,6 +1212,16 @@ function drawBotCloud(bot) {
     const orbitR = br + 8 + cc.radialFactor * (maxR - br - 8);
     const cx = bot.x + Math.cos(cc.angle) * orbitR;
     const cy = bot.y + Math.sin(cc.angle) * orbitR;
+    // Gem world: bot cloud items are gems, not coins
+    if (inGemWorld) {
+      const gi = Math.min(cc.denomIdx, GEM_DENOMINATIONS.length - 1);
+      ctx.save();
+      ctx.globalAlpha = 0.8;
+      ctx.translate(cx, cy);
+      drawGem(GEM_DENOMINATIONS[gi].name, 6 + gi * 1.1);
+      ctx.restore();
+      return;
+    }
     const r = 4 + cc.denomIdx * 0.8;
     const d = DENOMINATIONS[cc.denomIdx];
     ctx.save();
@@ -1577,9 +1582,13 @@ function updateMinions(dt) {
       const dx = player.x - m.x, dy = player.y - m.y;
       const d = Math.sqrt(dx*dx + dy*dy) || 1;
       if (d < playerRadius() + 14) {
-        // Deposit the single item into the cloud, then go back out for one more (do NOT die)
-        if (m.carrying > 0) { addToCloud(player.x, player.y, 0, m.carrying); playChing(0); }
+        // Deposit the grabbed item (as the actual gem/coin it was) into the cloud, then go back out
+        if (m.carrying > 0) {
+          addToCloud(player.x, player.y, m.carryDenom || 0, m.carrying);
+          playChing(m.carryDenom || 0);
+        }
         m.carrying = 0;
+        m.carryDenom = 0;
         m.mode = 'hunt';
       } else {
         m.x += (dx/d) * SPEED * dt;
@@ -1603,8 +1612,9 @@ function updateMinions(dt) {
       m.x += (dx/d) * SPEED * dt;
       m.y += (dy/d) * SPEED * dt;
       if (d < 16) {
-        // Grab exactly ONE thing, then head back
+        // Grab exactly ONE thing (remember its denomination), then head back
         m.carrying = best.value;
+        m.carryDenom = best.denomIdx;
         looseMoney = looseMoney.filter(lm => lm !== best);
         m.mode = 'return';
       }
