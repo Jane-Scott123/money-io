@@ -11,14 +11,14 @@
   #ui { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
 
   /* HUD */
-  #hud-denom { position: fixed; bottom: 60px; left: 16px; background: rgba(0,0,0,0.6); border-radius: 12px; padding: 8px 14px; color: #fff; font-size: 14px; font-weight: bold; pointer-events: none; }
+  #hud-denom { position: fixed; bottom: 130px; left: 16px; background: rgba(0,0,0,0.6); border-radius: 12px; padding: 8px 14px; color: #fff; font-size: 14px; font-weight: bold; pointer-events: none; }
   #hud-denom-icon { font-size: 28px; }
   #hud-denom-name { font-size: 11px; color: #ffd700; margin-top: 2px; }
   #hud-progress-wrap { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); width: min(400px, 80vw); pointer-events: none; }
   #hud-progress-label { color: #fff; font-size: 11px; text-align: center; margin-bottom: 4px; text-shadow: 1px 1px 2px #000; }
   #hud-progress-bar-bg { background: rgba(0,0,0,0.5); border-radius: 10px; height: 14px; border: 2px solid rgba(255,255,255,0.3); }
   #hud-progress-bar { height: 100%; border-radius: 8px; background: linear-gradient(90deg, #ffd700, #ff8c00); transition: width 0.1s; }
-  #hud-leaderboard { position: fixed; top: 16px; right: 16px; background: rgba(0,0,0,0.65); border-radius: 12px; padding: 10px 14px; color: #fff; font-size: 12px; min-width: 140px; pointer-events: none; }
+  #hud-leaderboard { position: fixed; top: 16px; right: 16px; background: rgba(0,0,0,0.65); border-radius: 12px; padding: 10px 14px; color: #fff; font-size: 12px; min-width: 190px; pointer-events: none; }
   #hud-leaderboard h3 { font-size: 11px; color: #ffd700; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
   #hud-leaderboard-list { list-style: none; }
   #hud-leaderboard-list li { padding: 2px 0; display: flex; align-items: center; gap: 6px; }
@@ -58,10 +58,10 @@
   @keyframes evo-pop { 0% { transform: scale(0.2); opacity: 0; } 50% { transform: scale(1.3); opacity: 1; } 100% { transform: scale(1); opacity: 0; } }
 
   /* Controls hint */
-  #controls-hint { position: fixed; bottom: 16px; left: 16px; background: rgba(0,0,0,0.5); border-radius: 8px; padding: 6px 10px; color: #aaa; font-size: 10px; pointer-events: none; }
+  #controls-hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.5); border-radius: 8px; padding: 6px 10px; color: #aaa; font-size: 10px; pointer-events: none; }
 
   /* Game canvas — fixed behind all UI */
-  #gameCanvas { position: fixed; top: 0; left: 0; z-index: 0; display: block; }
+  #gameCanvas { position: fixed; top: 0; left: 0; z-index: -1; display: block; }
 
   /* Error display */
   #err-display { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #900; color: #fff; padding: 20px; border-radius: 10px; font-size: 14px; z-index: 999; display: none; max-width: 80vw; white-space: pre-wrap; }
@@ -128,7 +128,7 @@
 <div id="hud-value" style="display:none">$<span id="hud-value-num">0.00</span></div>
 <div id="controls-hint" style="display:none">WASD/Arrows: Move &nbsp; U: Upgrades &nbsp; Hold Space: Dash &nbsp; E: Boost &nbsp; Q: Bait &nbsp; R: Minion</div>
 <!-- In-game upgrade button -->
-<button id="upgrade-btn" style="display:none;position:fixed;top:60px;right:16px;z-index:10;pointer-events:all;" class="btn btn-secondary" onclick="showUpgrades(false)" title="Upgrades (U)">⚡ Upgrade</button>
+<button id="upgrade-btn" style="display:none;position:fixed;bottom:16px;left:16px;z-index:10;pointer-events:all;" class="btn btn-secondary" onclick="showUpgrades(false)" title="Upgrades (U)">⚡ Upgrade</button>
 <div id="hud-cloud" style="display:none;position:fixed;top:60px;left:16px;background:rgba(0,0,0,0.6);border-radius:12px;padding:6px 12px;color:#fff;font-size:12px;pointer-events:none;">☁️ Cloud: <span id="hud-cloud-val">$0.00</span></div>
 
 <!-- Evolution Flash -->
@@ -556,11 +556,6 @@ function startGame() {
   activeDenomsRef = DENOMINATIONS;
   portal = null;
   minions = [];
-
-  // TEMP (testing): jump straight into the Gem World instead of the money world.
-  // Remove this block later to restore normal money-world start.
-  enterGemWorld();
-  return;
 
   showHUD(true);
   gameRunning = true;
@@ -1112,7 +1107,7 @@ function updateBot(bot, dt) {
   const ptotal = playerTotalValue();
   const prog = denom.evolveAt === Infinity ? 1 : Math.min(1, (ptotal - denom.value) / (denom.evolveAt - denom.value));
   const playerNearEvo = prog > 0.8;
-  const chaseRange = playerNearEvo ? 510 : 300;
+  const chaseRange = playerNearEvo ? 650 : 430; // bots notice & chase the player from a bit farther
 
   let nearestPrey = null, nearestPreyDist = 9999;
   let nearestThreat = null, nearestThreatDist = 9999;
@@ -2289,7 +2284,11 @@ function updateHUD() {
       const arr = inGemWorld ? GEM_DENOMINATIONS : DENOMINATIONS;
       const d2 = arr[Math.min(e.denomIdx, arr.length - 1)];
       const isYou = e.name === 'YOU';
-      return `<li style="${isYou ? 'color:#ffd700;font-weight:bold;' : ''}">${i+1}. ${d2.emoji} ${d2.name}${isYou ? ' (You)' : ''}</li>`;
+      const label = isYou ? 'You' : e.name;
+      const score = '$' + (e.value / 100).toFixed(2);
+      return `<li style="justify-content:space-between;${isYou ? 'color:#ffd700;font-weight:bold;' : ''}">`
+        + `<span>${i+1}. ${d2.emoji} ${label}</span>`
+        + `<span style="margin-left:10px;color:${isYou ? '#ffd700' : '#9fe6b0'};">${score}</span></li>`;
     }).join('');
   }
 }
