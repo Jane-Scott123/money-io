@@ -555,6 +555,11 @@ function startGame() {
   portal = null;
   minions = [];
 
+  // TEMP (testing): jump straight into the Gem World instead of the money world.
+  // Remove this block later to restore normal money-world start.
+  enterGemWorld();
+  return;
+
   showHUD(true);
   gameRunning = true;
   lastTime = 0;
@@ -1613,8 +1618,8 @@ function render() {
   ctx.save();
   ctx.translate(-camera.x, -camera.y);
 
-  // Floor
-  ctx.fillStyle = '#2a3a2a';
+  // Floor (gem world has a deep purple/blue background)
+  ctx.fillStyle = inGemWorld ? '#241436' : '#2a3a2a';
   ctx.fillRect(0, 0, WORLD_W, WORLD_H);
 
   // Grid lines
@@ -1792,6 +1797,50 @@ function drawSafeZone() {
   ctx.restore();
 }
 
+// Build a distinct path for each gem type (centered at 0,0). ctx must be translated already.
+function gemShapePath(name, r) {
+  ctx.beginPath();
+  if (name === 'Bronze') {
+    // Hexagon
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI/6 + i * Math.PI/3;
+      const px = Math.cos(a)*r, py = Math.sin(a)*r;
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    }
+  } else if (name === 'Silver') {
+    // Pentagon
+    for (let i = 0; i < 5; i++) {
+      const a = -Math.PI/2 + i * (Math.PI*2/5);
+      const px = Math.cos(a)*r, py = Math.sin(a)*r;
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    }
+  } else if (name === 'Gold') {
+    // Gold bar (trapezoid — narrower on top)
+    const w = r*2.1, h = r*1.2, tw = w*0.72;
+    ctx.moveTo(-tw/2, -h/2); ctx.lineTo(tw/2, -h/2);
+    ctx.lineTo(w/2, h/2); ctx.lineTo(-w/2, h/2);
+  } else if (name === 'Sapphire') {
+    // Downward triangle
+    ctx.moveTo(0, r*1.05); ctx.lineTo(-r*0.95, -r*0.75); ctx.lineTo(r*0.95, -r*0.75);
+  } else if (name === 'Ruby') {
+    // Rhombus (rotated square)
+    ctx.moveTo(0, -r); ctx.lineTo(r*0.8, 0); ctx.lineTo(0, r); ctx.lineTo(-r*0.8, 0);
+  } else if (name === 'Emerald') {
+    // Emerald cut (octagon — rectangle with cut corners)
+    const w = r*1.7, h = r*1.3, c = r*0.45;
+    ctx.moveTo(-w/2+c, -h/2); ctx.lineTo(w/2-c, -h/2); ctx.lineTo(w/2, -h/2+c);
+    ctx.lineTo(w/2, h/2-c); ctx.lineTo(w/2-c, h/2); ctx.lineTo(-w/2+c, h/2);
+    ctx.lineTo(-w/2, h/2-c); ctx.lineTo(-w/2, -h/2+c);
+  } else if (name === 'Diamond') {
+    // Classic cut diamond (flat table on top, point at bottom)
+    ctx.moveTo(-r*0.5, -r*0.75); ctx.lineTo(r*0.5, -r*0.75);
+    ctx.lineTo(r, -r*0.2); ctx.lineTo(0, r*1.05); ctx.lineTo(-r, -r*0.2);
+  } else {
+    ctx.arc(0, 0, r, 0, Math.PI*2);
+  }
+  ctx.closePath();
+}
+
 function drawLooseMoney(lm) {
   const d = lm.isGem ? GEM_DENOMINATIONS[lm.denomIdx] : DENOMINATIONS[lm.denomIdx];
   if (!d) return;
@@ -1801,21 +1850,18 @@ function drawLooseMoney(lm) {
   ctx.scale(pulse, pulse);
 
   if (d.isGem) {
-    // Diamond/gem shape
-    const s = lm.r;
-    ctx.beginPath();
-    ctx.moveTo(0, -s); ctx.lineTo(s*0.7, 0); ctx.lineTo(0, s*1.1);
-    ctx.lineTo(-s*0.7, 0); ctx.closePath();
+    // Distinct shape per gem type
+    gemShapePath(d.name, lm.r);
     ctx.fillStyle = d.color;
     ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.7)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.fillStyle = d.textColor;
-    ctx.font = `bold ${lm.r * 0.65}px Arial`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(d.emoji, 0, 0);
+    // Facet highlight line
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    gemShapePath(d.name, lm.r * 0.6);
+    ctx.stroke();
   } else if (d.isBill) {
     // Small bill rectangle
     const w = lm.r * 2.2, h = lm.r * 1.4;
@@ -1902,8 +1948,11 @@ function drawBait(b) {
 }
 
 function drawEntity(e, isPlayer = false) {
-  const d = DENOMINATIONS[e.denomIdx];
-  const r = isPlayer ? playerRadius() : denomRadius(e.denomIdx);
+  // In the gem world, entities are gems (clamp index to the gem ladder)
+  const gemWorld = inGemWorld;
+  const gd = gemWorld ? GEM_DENOMINATIONS[Math.min(e.denomIdx, GEM_DENOMINATIONS.length - 1)] : null;
+  const d = gemWorld ? gd : DENOMINATIONS[e.denomIdx];
+  const r = isPlayer ? playerRadius() : (gemWorld ? gd.radius : denomRadius(e.denomIdx));
   const stunned = e.stunTimer > 0;
 
   ctx.save();
@@ -1913,7 +1962,25 @@ function drawEntity(e, isPlayer = false) {
     ctx.globalAlpha = 0.5 + Math.sin(Date.now() * 0.02) * 0.3;
   }
 
-  if (d.isBill) {
+  if (gemWorld) {
+    // Gem shape (distinct per type)
+    ctx.shadowColor = 'rgba(0,0,0,0.4)';
+    ctx.shadowBlur = 8;
+    gemShapePath(d.name, r);
+    ctx.fillStyle = d.color;
+    ctx.fill();
+    ctx.strokeStyle = isPlayer ? '#fff' : 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = isPlayer ? 3 : 2;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    // Facet highlight
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    gemShapePath(d.name, r * 0.6);
+    ctx.stroke();
+    // Eyes
+    drawEyes(e.face, r * 0.22, r * 0.5);
+  } else if (d.isBill) {
     // Bill shape: wide rounded rectangle
     const w = r * 2.2, h = r * 1.4;
     // Shadow
