@@ -1532,9 +1532,9 @@ function enterGemWorld() {
   ghost = null; // no ghost in the gem world
   minions = [];
   matchUpgrades = {};
-  // Repopulate world with gem-flavored loose money (reuse same positions)
+  // Repopulate world with gem-flavored loose money (same amount as the money world)
   looseMoney = [];
-  for (let i = 0; i < LOOSE_MONEY_COUNT; i++) looseMoney.push(createGemMoney());
+  for (let i = 0; i < targetMoneyCount(); i++) looseMoney.push(createGemMoney());
   // Respawn bots at low gem levels
   bots.forEach((b, i) => {
     Object.assign(b, createBot(Math.min(2, Math.floor(i / 6))));
