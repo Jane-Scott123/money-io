@@ -134,6 +134,7 @@
 <!-- Evolution Flash -->
 <div id="evo-flash"></div>
 <div id="evo-text"></div>
+<div id="toast" style="position:fixed;top:90px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.75);color:#fff;font-weight:bold;font-size:16px;padding:8px 18px;border-radius:20px;z-index:60;display:none;pointer-events:none;"></div>
 
 <!-- Error display (hidden unless something breaks) -->
 <div id="err-display"></div>
@@ -205,15 +206,14 @@ const BASE_SPEEDS = [210, 200, 195, 185, 175, 160, 148, 138, 125, 112, 100, 90, 
 // ===================== UPGRADE DEFINITIONS =====================
 // costs are in cents (matching the game's value unit)
 const UPGRADE_DEFS = [
-  { id: 'speed',    name: 'Move Speed',        desc: 'Passive: +5% speed per level',               max: 10, costs: [8,20,40,70,110,160,220,300,400,550] },
-  { id: 'radius',   name: 'Eat Radius',        desc: 'Passive: +20% eat range per level (green ring)', max: 5, costs: [25,80,200,500,1200] },
+  { id: 'speed',    name: 'Move Speed',        desc: 'Passive: +15% speed per level',              max: 10, costs: [8,20,40,70,110,160,220,300,400,550] },
+  { id: 'radius',   name: 'Eat Radius',        desc: 'Passive: +40% eat range per level (green ring)', max: 5, costs: [25,80,200,500,1200] },
   { id: 'magnet',   name: 'Magnetism',         desc: 'Passive: pull loose money ≤ your size toward you', max: 8, costs: [15,40,80,140,220,340,500,720] },
-  { id: 'armor',    name: 'Armor',             desc: 'Passive: survive hits from larger players',  max: 5,  costs: [50,120,250,500,1000] },
+  { id: 'armor',    name: 'Armor',             desc: 'Passive: survive a hit from a bigger player (shows hits left)', max: 5, costs: [200,600,1500,4000,10000] },
   { id: 'bait',     name: 'Counterfeit Bait',  desc: 'Press Q in-game to drop a decoy — eaters get downgraded', max: 5, costs: [40,100,220,500,1100] },
   { id: 'ghost',    name: 'Ghost Summon',      desc: 'Unlock, then use the Summon button here to send the ghost at the richest bot', max: 3, costs: [500,2000,8000] },
-  { id: 'expand',   name: 'Expand Board',      desc: 'Instant: click to grow the world — more room & money', max: 3, costs: [300,1200,5000] },
   { id: 'moneybomb',name: 'Money Bomb',        desc: 'Instant: click to explode cash across the map (very expensive)', max: 1, costs: [50000] },
-  { id: 'minions',  name: 'Money Minions',    desc: 'Press R in-game to launch a minion that collects money & returns it', max: 5, costs: [800,2000,5000,12000,30000] },
+  { id: 'minions',  name: 'Money Minions',    desc: 'Press R in-game to launch a minion that collects gems near your size', max: 5, costs: [800,2000,5000,12000,30000] },
 ];
 
 // ===================== STATE =====================
@@ -854,6 +854,7 @@ function update(dt) {
       if (dx*dx + dy*dy < r*r) {
         if (player.armorHits > 0) {
           player.armorHits--;
+          showToast(`🛡️ Armor used — ${player.armorHits} left`);
           stunTimer = 0.5;
           // Knock the attacker far away and stun it so armor actually buys you escape room
           const kd = Math.sqrt(dx*dx + dy*dy) || 1;
@@ -1043,15 +1044,14 @@ function updateCloud(dt) {
 }
 
 function playerRadius() { return AD()[player.denomIdx].radius; }
-function playerEatRadius() { return playerRadius() * (1.15 + getUpgradeLevel('radius') * 0.20); }
+function playerEatRadius() { return playerRadius() * (1.15 + getUpgradeLevel('radius') * 0.40); }
 function denomRadius(di) { return DENOMINATIONS[di].radius; }
 
 function playerSpeed() {
   const base = BASE_SPEEDS[player.denomIdx] || 100;
-  const boost = 1;
-  const lvBoost = 1 + getUpgradeLevel('speed') * 0.05;
+  const lvBoost = 1 + getUpgradeLevel('speed') * 0.15;
   const dashBoost = dashActive ? 1.5 : 1;
-  return base * boost * lvBoost * dashBoost;
+  return base * lvBoost * dashBoost;
 }
 
 function updatePlayerMovement(dt) {
@@ -1179,7 +1179,7 @@ function updateBot(bot, dt) {
   const bdx = tx - bot.x, bdy = ty - bot.y;
   const bdist = Math.sqrt(bdx*bdx + bdy*bdy);
   if (bdist > 4) {
-    const spd = (BASE_SPEEDS[bot.denomIdx] || 100) * 0.72;
+    const spd = (BASE_SPEEDS[bot.denomIdx] || 100); // same base speed as the player
     bot.x += (bdx / bdist) * spd * dt;
     bot.y += (bdy / bdist) * spd * dt;
   }
@@ -1309,6 +1309,7 @@ function updateGhost(dt) {
     if (pdx*pdx + pdy*pdy < (gr + playerRadius()) * (gr + playerRadius())) {
       if (player.armorHits > 0) {
         player.armorHits--;
+        showToast(`🛡️ Armor used — ${player.armorHits} left`);
         stunTimer = 0.5;
         // Knock the ghost back and stun it so armor buys escape room
         const kd = Math.sqrt(pdx*pdx + pdy*pdy) || 1;
@@ -1392,6 +1393,16 @@ function drawGhost() {
   ctx.textBaseline = 'top';
   ctx.fillText('👻 GHOST', 0, r + 5);
   ctx.restore();
+}
+
+let toastTimer = null;
+function showToast(msg, ms = 1400) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.display = 'block';
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = 'none'; }, ms);
 }
 
 function spawnParticles(x, y, color, count) {
@@ -1571,7 +1582,8 @@ function updateMinions(dt) {
     // Hunt: seek nearest loose money ≤ player's denomination (no range limit — can go far)
     let best = null, bestDist = Infinity;
     looseMoney.forEach(lm => {
-      if (lm.denomIdx > player.denomIdx) return;
+      // Collect items from your level down to 3 levels below you
+      if (lm.denomIdx > player.denomIdx || lm.denomIdx < player.denomIdx - 3) return;
       const dx = lm.x - m.x, dy = lm.y - m.y;
       const d = dx*dx + dy*dy;
       if (d < bestDist) { bestDist = d; best = lm; }
@@ -2400,19 +2412,7 @@ function buyUpgrade(id) {
   if (id === 'armor') player.armorHits = matchUpgrades.armor;
 
   // Instant-effect upgrades
-  if (id === 'expand') {
-    boardExpansions++;
-    WORLD_W = BASE_WORLD_W + boardExpansions * 800;
-    WORLD_H = BASE_WORLD_H + boardExpansions * 640;
-    positionSafeZone(); // keep the safe zone in the corner of the new, larger board
-    // Fill the bigger board up to its proportional money target
-    const deficit = targetMoneyCount() - looseMoney.length;
-    for (let i = 0; i < deficit; i++) {
-      looseMoney.push(inGemWorld ? createGemMoney() : createLooseMoney());
-    }
-    spawnParticles(player.x, player.y, '#00ccff', 20);
-    playEvo(player.denomIdx);
-  } else if (id === 'moneybomb') {
+  if (id === 'moneybomb') {
     // Expensive explosion of cash — scatter high-value bills all over the world
     const bombCount = 80;
     for (let i = 0; i < bombCount; i++) {
